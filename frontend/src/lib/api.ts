@@ -1,6 +1,6 @@
 import { ERROR_MESSAGES, makeError } from "./errors";
 import { SAMPLE_RECORD } from "./sampleRecord";
-import type { ExportFormat, JobError, JobEvent, JobState, JobSummary, PartialRecord, Stage } from "./types";
+import type { ExportFormat, Health, JobError, JobEvent, JobState, JobSummary, PartialRecord, Stage } from "./types";
 
 // Backend contract: TRACE Backend Build Spec, sections 9 and 21 (see docs/api-contract.md).
 
@@ -19,6 +19,12 @@ export interface Api {
   listJobs(): Promise<JobSummary[]>;
   renameJob(jobId: string, title: string): Promise<JobSummary>;
   deleteJob(jobId: string): Promise<void>;
+  /** Stop a queued or running job; finished steps stay saved. */
+  cancelJob(jobId: string): Promise<JobSummary>;
+  /** Run a failed or cancelled job again from the step that stopped. */
+  retryJob(jobId: string): Promise<JobSummary>;
+  /** Backend readiness (ffmpeg, Ollama and its models), or null if unreachable. */
+  health(): Promise<Health | null>;
   /** Backend download URL, or null when the client should build the file itself. */
   exportUrl(jobId: string, fmt: ExportFormat): string | null;
   /** Seekable original recording served by the backend, or null. */
@@ -71,6 +77,7 @@ interface ServerEvent {
   warnings?: string[];
   error_code?: string;
   error_message?: string;
+  error_detail?: string | null;
   failed_stage?: Stage;
 }
 
@@ -90,6 +97,7 @@ function toJobEvent(e: ServerEvent): JobEvent {
           code: e.error_code ?? "E_INTERNAL",
           stage: e.failed_stage ?? (e.stage as Stage),
           user_message: e.error_message ?? ERROR_MESSAGES.E_INTERNAL,
+          detail: e.error_detail,
         }
       : undefined,
   };
@@ -118,7 +126,11 @@ function toJobState(d: ServerJobDetail): JobState {
     stage: (job.status === "failed" ? "failed" : job.stage) as Stage,
     error:
       job.status === "failed"
-        ? { code: job.error_code ?? "E_INTERNAL", user_message: job.error_message ?? ERROR_MESSAGES.E_INTERNAL }
+        ? {
+            code: job.error_code ?? "E_INTERNAL",
+            user_message: job.error_message ?? ERROR_MESSAGES.E_INTERNAL,
+            detail: job.error_detail,
+          }
         : null,
     record,
   };
@@ -167,6 +179,7 @@ const httpApi: Api = {
             record_ready: !!d.record,
             error_code: d.job.error_code ?? undefined,
             error_message: d.job.error_message ?? undefined,
+            error_detail: d.job.error_detail,
           }),
         );
       } catch {
@@ -216,6 +229,22 @@ const httpApi: Api = {
     await request<void>(`/jobs/${jobId}`, { method: "DELETE" });
   },
 
+  cancelJob(jobId) {
+    return request<JobSummary>(`/jobs/${jobId}/cancel`, { method: "POST" });
+  },
+
+  retryJob(jobId) {
+    return request<JobSummary>(`/jobs/${jobId}/retry`, { method: "POST" });
+  },
+
+  async health() {
+    try {
+      return await request<Health>(`/health`);
+    } catch {
+      return null;
+    }
+  },
+
   exportUrl(jobId, fmt) {
     return `${BASE}/jobs/${jobId}/export?fmt=${fmt}`;
   },
@@ -234,6 +263,9 @@ interface MockJob {
   stage: Stage;
   error?: JobError;
   listeners: Set<(e: JobEvent) => void>;
+  failAt?: Stage | null;
+  /** Bumped on cancel/retry so an older simulated run stops. */
+  run?: number;
 }
 const mockJobs = new Map<string, MockJob>();
 
@@ -305,6 +337,45 @@ function mockEvent(job: MockJob, status: JobEvent["status"], message?: string): 
   };
 }
 
+function mockFail(job: MockJob, err: JobError) {
+  job.error = err;
+  job.summary = {
+    ...job.summary,
+    status: "failed",
+    stage: "failed",
+    error_code: err.code as string,
+    error_message: err.user_message,
+    error_detail: err.detail ?? null,
+  };
+  job.listeners.forEach((l) => l(mockEvent(job, "failed")));
+}
+
+/** Simulate the pipeline from step `from`; a failure at failAt only happens once. */
+async function runMock(job: MockJob, from: number) {
+  const run = (job.run = (job.run ?? 0) + 1);
+  for (const [stage, ms, message] of MOCK_STEPS.slice(from)) {
+    if (job.run !== run) return;
+    job.stage = stage;
+    job.summary.status = "running";
+    job.listeners.forEach((l) => l(mockEvent(job, "running", message)));
+    await new Promise((r) => setTimeout(r, ms));
+    if (job.run !== run) return;
+    if (stage === job.failAt) {
+      job.failAt = null;
+      const code = stage === "speech_check" ? "E_NO_SPEECH" : "E_LM2_FAILED";
+      mockFail(job, {
+        ...makeError(code),
+        stage,
+        detail: code === "E_LM2_FAILED" ? "gemma3:12b returned invalid JSON 3 times (mock)." : null,
+      });
+      return;
+    }
+  }
+  job.stage = "completed";
+  job.summary = mockSummary(job.summary.id, job.summary.title, job.summary.source_file, "completed");
+  job.listeners.forEach((l) => l(mockEvent(job, "completed")));
+}
+
 const mockApi: Api = {
   mock: true,
 
@@ -317,31 +388,14 @@ const mockApi: Api = {
       file.name,
       "queued",
     );
-    const job: MockJob = { summary, stage: "queued", listeners: new Set() };
-    mockJobs.set(id, job);
     const failAt: Stage | null = /nospeech/i.test(file.name)
       ? "speech_check"
       : /fail-lm2/i.test(file.name)
         ? "documenting"
         : null;
-
-    (async () => {
-      for (const [stage, ms, message] of MOCK_STEPS) {
-        job.stage = stage;
-        job.summary.status = "running";
-        job.listeners.forEach((l) => l(mockEvent(job, "running", message)));
-        await new Promise((r) => setTimeout(r, ms));
-        if (stage === failAt) {
-          job.error = { ...makeError(stage === "speech_check" ? "E_NO_SPEECH" : "E_LM2_FAILED"), stage };
-          job.summary = { ...job.summary, status: "failed", stage: "failed", error_code: job.error.code as string };
-          job.listeners.forEach((l) => l(mockEvent(job, "failed")));
-          return;
-        }
-      }
-      job.stage = "completed";
-      job.summary = mockSummary(id, job.summary.title, file.name, "completed");
-      job.listeners.forEach((l) => l(mockEvent(job, "completed")));
-    })();
+    const job: MockJob = { summary, stage: "queued", listeners: new Set(), failAt };
+    mockJobs.set(id, job);
+    runMock(job, 0);
     return { jobId: id, cached: false };
   },
 
@@ -380,6 +434,31 @@ const mockApi: Api = {
     if (job && (job.summary.status === "running" || job.summary.status === "queued"))
       throw new ApiError(makeError("E_JOB_RUNNING"));
     mockJobs.delete(jobId);
+  },
+
+  async cancelJob(jobId) {
+    const job = mockJobs.get(jobId);
+    if (!job) throw new ApiError(makeError("E_NOT_FOUND"));
+    if (job.summary.status === "running" || job.summary.status === "queued") {
+      job.run = (job.run ?? 0) + 1;
+      mockFail(job, { ...makeError("E_CANCELLED"), stage: job.stage, detail: "Cancelled by the user." });
+    }
+    return job.summary;
+  },
+
+  async retryJob(jobId) {
+    const job = mockJobs.get(jobId);
+    if (!job) throw new ApiError(makeError("E_NOT_FOUND"));
+    if (job.summary.status !== "failed") return job.summary;
+    const from = Math.max(0, MOCK_STEPS.findIndex(([st]) => st === (job.error?.stage ?? job.stage)));
+    job.error = undefined;
+    job.summary = { ...job.summary, status: "queued", stage: "queued", error_code: null, error_message: null, error_detail: null };
+    runMock(job, from);
+    return job.summary;
+  },
+
+  async health() {
+    return null;
   },
 
   exportUrl() {

@@ -59,8 +59,40 @@ vllm serve google/gemma-3-27b-it --port 8002
 ```
 
 Parakeet needs `nemo_toolkit[asr]`; diarization needs `pyannote.audio`, `DIARIZATION_ENABLED=true` and an
-`HF_TOKEN` with access to `pyannote/speaker-diarization-3.1`. Both are optional: without them the stage is skipped
-and the reason is recorded in `meta.models`.
+`HF_TOKEN` whose account accepted the terms of `pyannote/speaker-diarization-community-1` (pyannote 4) or
+`pyannote/speaker-diarization-3.1` (pyannote 3), plus `pyannote/segmentation-3.0`. Both are optional: without them
+the stage is skipped, the reason is recorded in `meta.models` and shown in the UI. Without Parakeet, Whisper words
+below `LOWCONF_DISPUTE_THRESHOLD` are marked disputed instead.
+
+### Windows laptop, CPU only
+
+Install [ffmpeg](https://www.gyan.dev/ffmpeg/builds/) (`winget install Gyan.FFmpeg`, then open a new terminal) and
+[Ollama](https://ollama.com/download). In PowerShell:
+
+```powershell
+cd backend
+python -m venv .venv
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned   # once, if Activate.ps1 is blocked
+.venv\Scripts\Activate.ps1
+pip install -r requirements-windows.txt
+copy .env.cpu .env
+ollama pull qwen3:8b
+ollama pull gemma3:12b
+uvicorn app.main:app --port 8000
+```
+
+`.env.cpu` picks settings that keep quality while cutting time on CPU:
+
+| Setting | CPU profile | Why |
+|---|---|---|
+| Whisper | `large-v3-turbo`, int8, beam 1, all cores (`auto`) | about 6x faster than large-v3 on CPU, near-equal accuracy |
+| LM1 | `qwen3:8b`, thinking off | Qwen3 otherwise writes long hidden reasoning before every answer |
+| LM2 | `gemma3:12b`, `LM2_SCRATCHPAD=false` | about half the tokens to generate; the verifier still checks every item |
+| Context | `num_ctx` sized per call (8k/16k/32k) | Ollama's 2-4k default silently cut long prompts |
+| Re-check | off (NeMo does not install on Windows) | low-confidence words are marked disputed instead |
+
+On the first run Whisper downloads its model (about 1.6 GB for turbo); the progress line says so. Stage times are
+written to `data/jobs/{id}/timings.json`. For the fastest record use `LM2_MODEL=gemma3:4b` (lower quality).
 
 ## Run
 
@@ -80,13 +112,16 @@ Then start the frontend (`cd ../frontend && npm run dev`); it proxies `/api` to 
 | GET | `/api/jobs/{id}/events` | SSE, event `progress` (see below) |
 | PATCH | `/api/jobs/{id}` | `{"title"}`; updates the record and regenerates exports |
 | DELETE | `/api/jobs/{id}` | `204`; `409` while queued or running |
+| POST | `/api/jobs/{id}/cancel` | Stops a queued or running job at the next safe point (job becomes `failed` with `E_CANCELLED`); returns the JobSummary |
+| POST | `/api/jobs/{id}/retry` | `202`; runs a failed or cancelled job again, resuming after the last saved stage; `409` while running |
 | GET | `/api/jobs/{id}/audio` | Original file, supports HTTP Range |
 | GET | `/api/jobs/{id}/export` | `?fmt=json\|md\|docx\|txt_raw\|txt_refined`; file name from the title slug |
 | GET | `/api/schema/record` | JSON Schema of `MeetingRecord` |
-| GET | `/api/health` | `{"status","models","gpu"}` |
+| GET | `/api/health` | `{"status","ffmpeg","llm":{"backend","host","reachable","missing"},"whisper":{...},"models","gpu"}` |
 
 SSE `progress` data: `{"job_id","stage","status","progress","message","raw_ready","refined_ready","record_ready","warnings"}`,
-plus `error_code`, `error_message` and `failed_stage` on failure. A late subscriber immediately receives the latest state.
+plus `error_code`, `error_message`, `error_detail` (short technical reason, e.g. "Model 'gemma3:12b' is not
+downloaded in Ollama") and `failed_stage` on failure. `JobSummary` carries `error_detail` too. A late subscriber immediately receives the latest state.
 
 ## Errors
 
@@ -105,6 +140,8 @@ plus `error_code`, `error_message` and `failed_stage` on failure. A late subscri
 | `E_BUSY` | 429 | The server is busy with other uploads. Please try again in a moment. |
 | `E_NOT_FOUND` | 404 | This meeting could not be found. |
 | `E_JOB_RUNNING` | 409 | This meeting is still being processed. Try again when it has finished. |
+| `E_FFMPEG_MISSING` | 500 | ffmpeg is not installed on the server, so the audio can't be converted. Install ffmpeg and restart the backend. |
+| `E_CANCELLED` | — | Processing was cancelled. |
 | `E_INTERNAL` | 500 | Something unexpected went wrong. Please try again. |
 | `W_NON_ENGLISH` | — | (warning) This recording may not be in English; results may be less accurate. |
 
@@ -159,3 +196,12 @@ demo run, so they match the demonstration.
 - **Extra API errors** `E_BUSY`, `E_NOT_FOUND`, `E_JOB_RUNNING`; `DELETE` also refuses queued jobs.
 - **`LM2_BASE_URL`** (optional) lets LM2 use a second server, which vLLM needs.
 - **Partial results** include `refinement`, and SSE events carry `warnings` and `failed_stage`.
+- **CPU defaults.** Whisper settings are `auto` (large-v3/float16/beam 5 on a GPU, large-v3-turbo/int8/beam 1 on
+  CPU) instead of fixed large-v3/cuda. Ollama is called through its native `/api/chat` with the JSON schema as
+  `format`, a per-call `num_ctx`, and `think: false` for Qwen3, instead of the OpenAI-compatible endpoint.
+- **LM2 scratchpad** can be turned off (`LM2_SCRATCHPAD=false`) to halve generation on CPU. LM2 fields the model
+  leaves out default to empty, so a missing list never fails the whole record; the verifier still drops anything
+  without valid evidence.
+- **Cancel and retry** endpoints, `E_CANCELLED`, `E_FFMPEG_MISSING` and the `error_detail` field are additions.
+- **Low-confidence fallback.** When Parakeet is unavailable, words below `LOWCONF_DISPUTE_THRESHOLD` are marked
+  disputed (with no alternative), as the plan's fallback suggests.

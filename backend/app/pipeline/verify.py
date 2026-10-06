@@ -203,8 +203,11 @@ def build_meta(ctx: "JobContext") -> Meta:
         language_probability=float(whisper.get("language_probability", 1.0)),
         models={
             "stt": whisper.get("model", f"faster-whisper {s.WHISPER_MODEL}"),
-            "stt_check": recheck.get("model") or f"skipped ({recheck.get('reason', 'n/a')})",
-            "diarization": diar.get("model") or "off",
+            "stt_check": recheck.get("model") or (
+                f"skipped: {recheck.get('reason', 'n/a')}"
+                + ("; low-confidence words marked disputed instead" if recheck.get("fallback") else "")
+            ),
+            "diarization": diar.get("model") or f"skipped: {diar.get('reason', 'off')}",
             "lm1": s.LM1_MODEL,
             "lm2": s.LM2_MODEL,
         },

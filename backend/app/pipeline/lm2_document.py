@@ -10,10 +10,9 @@ from rapidfuzz import fuzz
 from app.core.errors import PipelineError
 from app.core.stages import Stage
 from app.core.text import estimate_tokens
-from app.llm.client import load_prompt
+from app.llm.client import LLMUnavailable, load_prompt
 from app.llm.json_repair import InvalidModelOutput
-from app.models.llm_io import LM2Output, SummaryPick
-from app.models.record import MinutesTopic
+from app.models.llm_io import LM2Output, LM2Record, LM2Topic, SummaryPick
 from app.pipeline.lm1_vocabulary import chunk_lines, transcript_lines
 
 if TYPE_CHECKING:
@@ -22,9 +21,15 @@ if TYPE_CHECKING:
 DEDUPE_RATIO = 90
 
 
-def user_message(lines: list[str]) -> str:
+NO_SCRATCHPAD_NOTE = (
+    "\n\nNOTE: This output has no scratchpad field. Do the PROCEDURE silently in your head and output "
+    "only the record fields."
+)
+
+
+def user_message(lines: list[str], schema_model: type = LM2Output) -> str:
     """Transcript plus the JSON schema (helps servers without constrained decoding)."""
-    schema = json.dumps(LM2Output.model_json_schema(), ensure_ascii=False)
+    schema = json.dumps(schema_model.model_json_schema(), ensure_ascii=False)
     return "TRANSCRIPT\n" + "\n".join(lines) + "\n\nJSON SCHEMA\n" + schema
 
 
@@ -54,9 +59,9 @@ def _dedupe(items: list[Any], text_of, ids_of) -> list[Any]:
     return kept
 
 
-def merge_outputs(parts: list[LM2Output]) -> LM2Output:
+def merge_outputs(parts: list[LM2Record]) -> LM2Output:
     """Merge per-chunk outputs; the summary is chosen afterwards."""
-    topics: dict[str, MinutesTopic] = {}
+    topics: dict[str, LM2Topic] = {}
     for p in parts:
         for t in p.minutes:
             key = t.topic.strip().lower()
@@ -81,25 +86,33 @@ async def document(ctx: "JobContext") -> None:
     refined = ctx.read("refined_transcript.json")
     lines = transcript_lines(refined, with_speaker=True)
     system = load_prompt("lm2_document")
-    call = lambda user, schema=LM2Output: ctx.llm.json_call(  # noqa: E731
+    record_schema = LM2Output if s.LM2_SCRATCHPAD else LM2Record
+    if not s.LM2_SCRATCHPAD:
+        system += NO_SCRATCHPAD_NOTE
+
+    async def on_retry(msg: str) -> None:
+        await ctx.progress(0.5, f"Writing the meeting record: {msg}")
+
+    call = lambda user, schema=record_schema: ctx.llm.json_call(  # noqa: E731
         s.LM2_MODEL, system, user, schema, s.LLM_MAX_RETRIES, max_tokens=8192, job_id=ctx.job_id,
+        on_retry=on_retry,
     )
     try:
         budget = s.LM2_MAX_INPUT_TOKENS - estimate_tokens(system) - 2000
         if estimate_tokens("\n".join(lines)) <= budget:
-            await ctx.progress(0.1, "Writing the meeting record")
-            out = await call(user_message(lines))
+            await ctx.progress(0.1, f"Writing the meeting record with {s.LM2_MODEL}")
+            out = await call(user_message(lines, record_schema))
             mode = "single"
         else:
             chunks = overlapping_chunks(lines, budget)
             parts = []
             for i, chunk in enumerate(chunks):
                 await ctx.progress(i / (len(chunks) + 1), f"Writing the meeting record (part {i + 1} of {len(chunks)})")
-                parts.append(await call(user_message(chunk)))
+                parts.append(await call(user_message(chunk, record_schema)))
             out = merge_outputs(parts)
             out.summary = await pick_summary(ctx, call, out)
             mode = f"chunked:{len(chunks)}"
-    except InvalidModelOutput as e:
+    except (InvalidModelOutput, LLMUnavailable) as e:
         raise PipelineError("E_LM2_FAILED", Stage.DOCUMENTING, str(e)) from e
     except PipelineError:
         raise

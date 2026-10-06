@@ -3,7 +3,7 @@ import { ApiError, type Api } from "../lib/api";
 import { makeError } from "../lib/errors";
 import { fmtTime } from "../lib/format";
 import { type JobError, type PartialRecord, type Segment, type Stage } from "../lib/types";
-import { Brand, Icon, cx } from "./ui";
+import { Brand, Button, Icon, cx } from "./ui";
 
 // Plan 11.2: the user-facing steps, each covering one or more backend stages.
 const STEPS: { label: string; stages: Stage[]; doing: string }[] = [
@@ -22,15 +22,19 @@ interface Props {
   /** Finished, or failed late with transcripts available (error set). */
   onDone: (record: PartialRecord, error?: JobError) => void;
   onFail: (error: JobError) => void;
+  /** Go back to the upload screen; the job keeps running on the server. */
+  onLeave: () => void;
 }
 
-export function ProcessingScreen({ api, jobId, fileName, onDone, onFail }: Props) {
+export function ProcessingScreen({ api, jobId, fileName, onDone, onFail, onLeave }: Props) {
   const [stage, setStage] = useState<Stage>("uploaded");
   const [failedStage, setFailedStage] = useState<Stage | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [progress, setProgress] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
   const [preview, setPreview] = useState<Segment[] | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const cb = useRef({ onDone, onFail });
   cb.current = { onDone, onFail };
 
@@ -80,6 +84,17 @@ export function ProcessingScreen({ api, jobId, fileName, onDone, onFail }: Props
     return stop;
   }, [api, jobId]);
 
+  const cancel = async () => {
+    setCancelling(true);
+    setActionError(null);
+    try {
+      await api.cancelJob(jobId); // the progress stream then reports the job as cancelled
+    } catch (e) {
+      setCancelling(false);
+      setActionError(e instanceof ApiError ? e.jobError.user_message : "Couldn't cancel.");
+    }
+  };
+
   const current = failedStage ?? stage;
   const activeStep = STEPS.findIndex((s) => s.stages.includes(current));
 
@@ -87,7 +102,17 @@ export function ProcessingScreen({ api, jobId, fileName, onDone, onFail }: Props
     <div className="flex min-h-full flex-col bg-bg">
       <header className="flex items-center justify-between border-b border-ink bg-surface px-5 py-3 sm:px-10">
         <Brand compact />
-        <span className="font-mono text-[10.5px] tracking-[0.14em] text-ink-3">JOB {jobId.toUpperCase()}</span>
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-[10.5px] tracking-[0.14em] text-ink-3 max-sm:hidden">JOB {jobId.toUpperCase()}</span>
+          <Button variant="ghost" size="sm" onClick={onLeave} title="Processing continues; reopen it from Recent meetings">
+            Back to home
+          </Button>
+          {!failedStage && (
+            <Button size="sm" onClick={cancel} disabled={cancelling}>
+              <Icon.x className="size-3.5" /> {cancelling ? "Cancelling…" : "Cancel"}
+            </Button>
+          )}
+        </div>
       </header>
     <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col px-5 py-12 sm:px-10">
       <div className="mb-3 flex items-center gap-2.5 font-mono text-[11px] tracking-[0.18em] text-ink-2">
@@ -101,7 +126,7 @@ export function ProcessingScreen({ api, jobId, fileName, onDone, onFail }: Props
         {failedStage
           ? "We kept everything that finished before the problem."
           : stage === "queued"
-            ? "Another recording is using the GPU. Yours starts as soon as it finishes."
+            ? "Another recording is being processed. Yours starts as soon as it finishes."
             : STEPS[Math.max(0, activeStep)]?.doing}
       </p>
       <div className="mt-6 flex items-center gap-3 font-mono text-[11px] tracking-[0.08em] text-ink-3" aria-live="polite">
@@ -138,6 +163,10 @@ export function ProcessingScreen({ api, jobId, fileName, onDone, onFail }: Props
           );
         })}
       </ol>
+
+      {actionError && (
+        <p role="alert" className="mt-6 rounded-[2px] bg-bad-soft px-3 py-2 text-xs text-bad">{actionError}</p>
+      )}
 
       {warnings.includes("W_NON_ENGLISH") && (
         <p className="mt-6 rounded-[2px] bg-warn-soft px-3 py-2 text-xs text-warn">

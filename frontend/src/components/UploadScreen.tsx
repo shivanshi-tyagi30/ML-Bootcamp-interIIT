@@ -6,6 +6,7 @@ import { DatePill } from "./landing/DatePill";
 import { HeroIllustration } from "./landing/HeroIllustration";
 import { PixelWord } from "./landing/PixelWord";
 import { RecentMeetings } from "./RecentMeetings";
+import { SetupCheck } from "./SetupCheck";
 import { Brand, Icon, cx } from "./ui";
 
 interface Props {
@@ -197,12 +198,15 @@ export function UploadScreen({ error, busy, mock, theme, onTheme, api, onStart, 
               <div className="flex-1">
                 <div className="text-[14px] font-medium text-bad">{shown.user_message}</div>
                 <div className="font-mono text-[10.5px] text-ink-3">{shown.code}</div>
+                {shown.detail && <div className="mt-1 font-mono text-[11px] break-words text-ink-2">{shown.detail}</div>}
               </div>
               <button onClick={retry} className="shrink-0 border border-ink bg-surface px-2.5 py-1 text-[12px] font-medium hover:bg-ink hover:text-surface">
                 Try another file
               </button>
             </div>
           )}
+
+          {!mock && <SetupCheck api={api} />}
 
           <RecentMeetings api={api} onOpen={onOpenJob} />
 

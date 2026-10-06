@@ -22,11 +22,15 @@ function Row({
   onOpen,
   onRename,
   onDelete,
+  onCancel,
+  onRetry,
 }: {
   job: JobSummary;
   onOpen: () => void;
   onRename: (title: string) => Promise<void>;
   onDelete: () => Promise<void>;
+  onCancel: () => Promise<void>;
+  onRetry: () => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
   const [confirm, setConfirm] = useState(false);
@@ -74,7 +78,7 @@ function Row({
             {job.title}
           </button>
         )}
-        <div className="truncate font-mono text-[10.5px] text-ink-3">
+        <div className="truncate font-mono text-[10.5px] text-ink-3" title={job.error_detail ?? undefined}>
           {when(job.created_at)}
           {job.duration_s ? ` · ${fmtTime(job.duration_s)}` : ""}
           {job.status === "completed" &&
@@ -83,6 +87,16 @@ function Row({
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-1 opacity-60 group-focus-within:opacity-100 group-hover:opacity-100">
+        {busy && (
+          <button onClick={onCancel} title="Stop processing" className="h-7 px-2 text-[11px] font-medium text-ink-2 hover:bg-bad-soft hover:text-bad">
+            Cancel
+          </button>
+        )}
+        {job.status === "failed" && (
+          <button onClick={onRetry} title="Run again from the step that stopped" className="h-7 px-2 text-[11px] font-medium text-ink-2 hover:bg-raised hover:text-ink">
+            Retry
+          </button>
+        )}
         <button
           onClick={() => setEditing(true)}
           aria-label={`Rename ${job.title}`}
@@ -163,6 +177,22 @@ export function RecentMeetings({ api, onOpen }: { api: Api; onOpen: (jobId: stri
                 setJobs((js) => js?.map((x) => (x.id === j.id ? updated : x)) ?? null);
               } catch (e) {
                 setError(e instanceof ApiError ? e.jobError.user_message : "Rename failed.");
+              }
+            }}
+            onCancel={async () => {
+              try {
+                const updated = await api.cancelJob(j.id);
+                setJobs((js) => js?.map((x) => (x.id === j.id ? updated : x)) ?? null);
+              } catch (e) {
+                setError(e instanceof ApiError ? e.jobError.user_message : "Cancel failed.");
+              }
+            }}
+            onRetry={async () => {
+              try {
+                await api.retryJob(j.id);
+                onOpen(j.id);
+              } catch (e) {
+                setError(e instanceof ApiError ? e.jobError.user_message : "Retry failed.");
               }
             }}
             onDelete={async () => {

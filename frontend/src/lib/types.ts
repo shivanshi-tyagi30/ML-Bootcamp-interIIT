@@ -7,7 +7,7 @@ export interface Word {
   end: number;
   conf?: number;
   disputed?: boolean;
-  alt?: string;
+  alt?: string | null; // null: flagged for low confidence, no second model ran
 }
 
 export interface Segment {
@@ -163,6 +163,8 @@ export type ErrorCode =
   | "E_BUSY"
   | "E_NOT_FOUND"
   | "E_JOB_RUNNING"
+  | "E_CANCELLED"
+  | "E_FFMPEG_MISSING"
   | "E_INTERNAL"
   | "E_NETWORK";
 
@@ -170,6 +172,8 @@ export interface JobError {
   code: ErrorCode | string;
   stage?: Stage;
   user_message: string;
+  /** Short technical reason from the server, e.g. which model failed and why. */
+  detail?: string | null;
 }
 
 /** One `progress` Server-Sent Event from GET /api/jobs/{id}/events. */
@@ -194,6 +198,7 @@ export interface JobSummary {
   stage: string;
   error_code?: string | null;
   error_message?: string | null;
+  error_detail?: string | null;
   duration_s?: number | null;
   n_decisions: number;
   n_tasks: number;
@@ -208,6 +213,15 @@ export interface JobState {
   error?: JobError | null;
   warnings?: string[];
   record: PartialRecord;
+}
+
+/** GET /api/health: what the backend can reach right now. */
+export interface Health {
+  status: string;
+  ffmpeg?: boolean;
+  llm?: { backend: string; host: string; reachable: boolean | null; missing: string[] };
+  whisper?: { model: string; device: string; compute_type: string; beam_size: number };
+  gpu?: boolean;
 }
 
 export type ExportFormat = "json" | "md" | "docx" | "txt_raw" | "txt_refined";

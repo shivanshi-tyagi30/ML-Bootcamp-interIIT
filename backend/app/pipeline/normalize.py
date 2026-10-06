@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -16,8 +17,16 @@ if TYPE_CHECKING:
     from app.pipeline.runner import JobContext
 
 
+def require_ffmpeg() -> None:
+    """Raise E_FFMPEG_MISSING if ffmpeg/ffprobe are not on PATH (so a missing tool isn't blamed on the file)."""
+    missing = [t for t in ("ffmpeg", "ffprobe") if shutil.which(t) is None]
+    if missing:
+        raise PipelineError("E_FFMPEG_MISSING", Stage.NORMALIZING, f"not on PATH: {', '.join(missing)}")
+
+
 def probe(path: Path, settings: Settings) -> dict[str, Any]:
     """ffprobe the file; raises E_UNREADABLE (no audio) or E_TOO_LONG."""
+    require_ffmpeg()
     try:
         out = subprocess.run(
             ["ffprobe", "-v", "error", "-print_format", "json", "-show_streams", "-show_format", str(path)],
@@ -44,6 +53,7 @@ def probe(path: Path, settings: Settings) -> dict[str, Any]:
 
 def to_wav16k(src: Path, dst: Path) -> None:
     """Convert to 16 kHz mono 16-bit PCM with loudness normalisation; raises E_UNREADABLE."""
+    require_ffmpeg()
     cmd = [
         "ffmpeg", "-y", "-v", "error", "-i", str(src), "-vn", "-ac", "1", "-ar", "16000",
         "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-c:a", "pcm_s16le", str(dst),

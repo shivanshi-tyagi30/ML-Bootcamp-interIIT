@@ -19,6 +19,7 @@ class JobSummary(BaseModel):
     stage: str
     error_code: str | None = None
     error_message: str | None = None
+    error_detail: str | None = None
     duration_s: float | None = None
     n_decisions: int = 0
     n_tasks: int = 0

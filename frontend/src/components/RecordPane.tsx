@@ -201,6 +201,7 @@ export function RecordPane({ record, segments, tab, onTab, selectedId, onJump, e
             <div className="font-medium text-bad">{error?.user_message ?? "The meeting record isn't available."}</div>
             <p className="mt-1 text-ink-2">The raw and refined transcripts are still available on the left and in Downloads.</p>
             {error?.code && <div className="mt-1 font-mono text-[11px] text-ink-3">{error.code}</div>}
+            {error?.detail && <div className="mt-1 font-mono text-[11px] break-words text-ink-2">{error.detail}</div>}
           </div>
         ) : tab === "summary" ? (
           r.summary!.length ? (

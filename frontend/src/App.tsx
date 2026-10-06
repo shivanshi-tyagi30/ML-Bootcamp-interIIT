@@ -85,10 +85,10 @@ export default function App() {
         fileName={view.fileName}
         onDone={(record, error) => setView({ name: "workspace", jobId: view.jobId, record, error })}
         onFail={(error) => {
-          setAudio(null);
           setUploadError(error);
           setView({ name: "upload" });
         }}
+        onLeave={() => setView({ name: "upload" })}
       />
     );
 
@@ -106,6 +106,10 @@ export default function App() {
         onNew={() => {
           setAudio(null);
           setView({ name: "upload" });
+        }}
+        onRetry={async () => {
+          await api.retryJob(view.jobId);
+          setView({ name: "processing", jobId: view.jobId, fileName: view.record.meta.title ?? "recording" });
         }}
       />
     );

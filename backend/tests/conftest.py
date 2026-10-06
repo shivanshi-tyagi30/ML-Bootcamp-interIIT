@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from app.config import Settings
-from app.models.llm_io import LM1Output, LM2Output, Vocabulary
+from app.models.llm_io import LM1Output, LM2Output, LM2Record, Vocabulary
 from app.models.record import (
     Fidelity, MeetingRecord, Meta, Refinement, Segment, Word,
 )
@@ -95,7 +95,7 @@ class FakeSTT:
     name = "fake-whisper"
     loaded = True
 
-    def transcribe(self, path: str, initial_prompt: str | None) -> dict[str, Any]:
+    def transcribe(self, path: str, initial_prompt: str | None, progress=None, should_stop=None) -> dict[str, Any]:
         segments = []
         for s in sample_segments():
             segments.append({
@@ -114,7 +114,7 @@ class FakeLLM:
         self.fail_lm2 = fail_lm2
         self.calls: list[str] = []
 
-    async def json_call(self, model, system, user, schema, max_retries, max_tokens=4096, job_id="-"):
+    async def json_call(self, model, system, user, schema, max_retries, max_tokens=4096, job_id="-", on_retry=None):
         self.calls.append(schema.__name__)
         if schema is Vocabulary:
             return Vocabulary(domain="ML engineering", terms=[
@@ -131,12 +131,12 @@ class FakeLLM:
                  "rationale": "?", "confidence": 0.8},
             ]
             return LM1Output(domain_guess="ML", edits=[e for e in edits if f'"{e["segment_id"]}"' in user])
-        if schema is LM2Output:
+        if schema in (LM2Output, LM2Record):
             if self.fail_lm2:
                 from app.llm.json_repair import InvalidModelOutput
 
                 raise InvalidModelOutput("bad json")
-            return LM2Output(**(self.lm2 or DEFAULT_LM2))
+            return schema(**(self.lm2 or DEFAULT_LM2))
         raise AssertionError(f"unexpected schema {schema}")
 
 

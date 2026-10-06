@@ -30,8 +30,12 @@ function PieceView({ p, mode }: { p: Piece; mode: TranscriptMode }) {
           className="cursor-help border-b-2 border-dotted border-warn"
           content={
             <>
-              <div className="font-medium text-warn">Disputed word</div>
-              The second speech model heard “{p.word.alt ?? "something else"}”.
+              <div className="font-medium text-warn">{p.word.alt != null ? "Disputed word" : "Unclear word"}</div>
+              {p.word.alt != null ? (
+                <>The second speech model heard “{p.word.alt || "nothing"}”.</>
+              ) : (
+                <>The speech model wasn't sure about this word.</>
+              )}
               {p.word.conf != null && <> Confidence {pct(p.word.conf)}.</>}
             </>
           }
