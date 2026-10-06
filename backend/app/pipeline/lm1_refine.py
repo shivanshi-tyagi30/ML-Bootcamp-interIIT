@@ -8,13 +8,16 @@ from typing import TYPE_CHECKING, Any
 
 from app.core.errors import PipelineError
 from app.core.stages import Stage
-from app.llm.client import load_prompt
+from app.llm.client import LLMUnavailable, load_prompt
 from app.llm.json_repair import InvalidModelOutput
 from app.models.llm_io import LM1Output
 from app.pipeline.lm1_vocabulary import vocabulary_json
 
 if TYPE_CHECKING:
     from app.pipeline.runner import JobContext
+
+# Edits are short; capping the output keeps a slow CPU model from rambling.
+MAX_EDIT_TOKENS = 1536
 
 MARKER = re.compile(r"\[\[([^|\]]*)\|[^\]]*\]\]")
 
@@ -62,14 +65,19 @@ async def refine(ctx: "JobContext") -> None:
     edits: list[dict[str, Any]] = []
     domains: list[str] = []
     for k, win in enumerate(wins):
-        await ctx.progress(k / max(1, len(wins)), f"Refining terminology (window {k + 1} of {len(wins)})")
+        label = f"Refining terminology (window {k + 1} of {len(wins)})"
+        await ctx.progress(k / max(1, len(wins)), label)
         target_ids = {segs[i]["id"] for i in win[1]}
+
+        async def on_retry(msg: str, k: int = k, label: str = label) -> None:
+            await ctx.progress(k / max(1, len(wins)), f"{label}: {msg}")
+
         try:
             out = await ctx.llm.json_call(
                 ctx.settings.LM1_MODEL, system, window_prompt(vocab, segs, win), LM1Output,
-                ctx.settings.LLM_MAX_RETRIES, max_tokens=4096, job_id=ctx.job_id,
+                ctx.settings.LLM_MAX_RETRIES, max_tokens=MAX_EDIT_TOKENS, job_id=ctx.job_id, on_retry=on_retry,
             )
-        except InvalidModelOutput as e:
+        except (InvalidModelOutput, LLMUnavailable) as e:
             raise PipelineError("E_LM1_FAILED", Stage.REFINING, f"window {k + 1}: {e}") from e
         except Exception as e:  # noqa: BLE001 - connection errors etc.
             raise PipelineError("E_LM1_FAILED", Stage.REFINING, repr(e)) from e

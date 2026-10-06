@@ -15,6 +15,9 @@
 # Backend (GPU machine, Ollama running with qwen3:14b and gemma3:27b)
 cd backend && pip install -r requirements.txt && uvicorn app.main:app --port 8000
 
+# Windows laptop without a GPU: see "Windows laptop, CPU only" in backend/README.md
+#   (pip install -r requirements-windows.txt, copy .env.cpu .env, ollama pull qwen3:8b gemma3:12b)
+
 # Frontend
 cd frontend && npm install && npm run dev   # open http://localhost:5173
 ```

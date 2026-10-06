@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   stage         TEXT NOT NULL,
   error_code    TEXT,
   error_message TEXT,
+  error_detail  TEXT,
   duration_s    REAL,
   n_decisions   INTEGER DEFAULT 0,
   n_tasks       INTEGER DEFAULT 0,
@@ -30,7 +31,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at DESC);
 
 COLUMNS = (
     "id", "title", "source_file", "file_sha256", "status", "stage", "error_code", "error_message",
-    "duration_s", "n_decisions", "n_tasks", "created_at", "updated_at",
+    "error_detail", "duration_s", "n_decisions", "n_tasks", "created_at", "updated_at",
 )
 UPDATABLE = set(COLUMNS) - {"id", "created_at"}
 
@@ -58,6 +59,9 @@ class JobDB:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         async with aiosqlite.connect(self.path) as conn:
             await conn.executescript(SCHEMA)
+            cur = await conn.execute("PRAGMA table_info(jobs)")
+            if "error_detail" not in {r[1] for r in await cur.fetchall()}:  # databases from v1.0
+                await conn.execute("ALTER TABLE jobs ADD COLUMN error_detail TEXT")
             await conn.commit()
 
     async def insert(self, row: dict[str, Any]) -> None:
@@ -134,8 +138,9 @@ class JobDB:
             cur = await conn.execute("SELECT id FROM jobs WHERE status IN ('queued', 'running')")
             ids = [r[0] for r in await cur.fetchall()]
             await conn.execute(
-                "UPDATE jobs SET status='failed', stage='failed', error_code=?, error_message=?, updated_at=? "
-                "WHERE status IN ('queued', 'running')",
+                "UPDATE jobs SET status='failed', stage='failed', error_code=?, error_message=?, "
+                "error_detail='The server restarted while this meeting was processing. Use Retry to continue.', "
+                "updated_at=? WHERE status IN ('queued', 'running')",
                 (code, message, now_iso()),
             )
             await conn.commit()

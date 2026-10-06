@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
@@ -15,6 +16,7 @@ from app.config import Settings, get_settings
 from app.core.db import JobDB
 from app.core.errors import user_message
 from app.core.events import EventBus
+from app.llm.client import ollama_status
 from app.models.record import MeetingRecord
 from app.pipeline import diarize, recheck, stt_whisper
 from app.pipeline.runner import Services, run_job
@@ -59,7 +61,7 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         """Create folders and the DB; fail jobs interrupted by a restart."""
         settings.jobs_dir.mkdir(parents=True, exist_ok=True)
         await db.init()
-        msg = user_message("E_INTERNAL")
+        msg = user_message("E_INTERNAL")  # detail column explains the restart
         for job_id in await db.mark_interrupted("E_INTERNAL", msg):
             logging.getLogger(__name__).warning("server restarted; job marked failed", extra={"job_id": job_id})
         yield
@@ -90,8 +92,17 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         except ImportError:
             gpu = False
         loaded = lambda m: bool(m and getattr(m, "loaded", False))  # noqa: E731
+        models = list(dict.fromkeys([settings.LM1_MODEL, settings.LM2_MODEL]))
+        if settings.LLM_BACKEND == "ollama":
+            llm = await ollama_status(settings.ollama_host, models)
+        else:
+            llm = {"reachable": None, "missing": []}
+        rt = settings.whisper_runtime()
         return {
             "status": "ok",
+            "ffmpeg": bool(shutil.which("ffmpeg") and shutil.which("ffprobe")),
+            "llm": {"backend": settings.LLM_BACKEND, "host": settings.ollama_host, **llm},
+            "whisper": {k: rt[k] for k in ("model", "device", "compute_type", "beam_size")},
             "models": {
                 "stt": loaded(services.stt or stt_whisper._default),
                 "stt_check": loaded(services.recheck_asr or recheck._default),

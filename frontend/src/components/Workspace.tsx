@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { Api } from "../lib/api";
+import { ApiError, type Api } from "../lib/api";
 import type { TranscriptMode } from "../lib/annotate";
 import { fmtTime } from "../lib/format";
 import type { JobError, PartialRecord, Segment } from "../lib/types";
@@ -17,6 +17,8 @@ interface Props {
   record: PartialRecord;
   audioUrl: string | null;
   error?: JobError;
+  /** Run the failed steps again (keeps everything that already finished). */
+  onRetry?: () => Promise<void>;
   theme: "light" | "dark";
   onTheme: () => void;
   onNew: () => void;
@@ -25,7 +27,9 @@ interface Props {
 /** Plays a moment slightly early so the listener hears it in context. */
 const LEAD_IN_S = 2;
 
-export function Workspace({ api, jobId, record, audioUrl, error, theme, onTheme, onNew }: Props) {
+export function Workspace({ api, jobId, record, audioUrl, error, theme, onTheme, onNew, onRetry }: Props) {
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
   const raw = record.raw_transcript ?? [];
   const audio = useAudio(audioUrl, record.meta.duration_s ?? raw.at(-1)?.end ?? 0);
   const [mode, setMode] = useState<TranscriptMode>(record.refinement ? "diff" : "raw");
@@ -107,6 +111,12 @@ export function Workspace({ api, jobId, record, audioUrl, error, theme, onTheme,
   }, [audio, pins, selectedId, selectPin]);
 
   const m = record.meta.models ?? {};
+  const skipped = [
+    { label: "Second-opinion check", value: m.stt_check },
+    { label: "Speaker labels", value: m.diarization },
+  ]
+    .filter((x) => x.value?.startsWith("skipped"))
+    .map((x) => ({ label: x.label, reason: x.value!.replace(/^skipped:\s*/, "") }));
 
   return (
     <div className="flex h-full flex-col">
@@ -125,6 +135,7 @@ export function Workspace({ api, jobId, record, audioUrl, error, theme, onTheme,
                   <dl className="grid grid-cols-[auto_1fr] gap-x-3">
                     {m.stt && <><dt className="text-ink-3">Speech</dt><dd>{m.stt}</dd></>}
                     {m.stt_check && <><dt className="text-ink-3">Second opinion</dt><dd>{m.stt_check}</dd></>}
+                    {m.diarization && <><dt className="text-ink-3">Speakers</dt><dd>{m.diarization}</dd></>}
                     {m.lm1 && <><dt className="text-ink-3">LM1 refiner</dt><dd>{m.lm1}</dd></>}
                     {m.lm2 && <><dt className="text-ink-3">LM2 documenter</dt><dd>{m.lm2}</dd></>}
                   </dl>
@@ -151,9 +162,41 @@ export function Workspace({ api, jobId, record, audioUrl, error, theme, onTheme,
       )}
 
       {error && record.summary == null && (
-        <div role="alert" className="flex items-center gap-2 border-b border-bad/30 bg-bad-soft px-4 py-2 text-sm text-bad">
+        <div role="alert" className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-bad/30 bg-bad-soft px-4 py-2 text-sm text-bad">
           <Icon.alert /> {error.user_message}
           <span className="font-mono text-[11px] text-ink-3">{error.code}</span>
+          {error.detail && <span className="min-w-0 basis-full font-mono text-[11px] break-words text-ink-2 sm:basis-auto">{error.detail}</span>}
+          {retryError && <span className="text-xs">{retryError}</span>}
+          {onRetry && (
+            <Button
+              size="sm"
+              className="ml-auto"
+              disabled={retrying}
+              onClick={async () => {
+                setRetrying(true);
+                setRetryError(null);
+                try {
+                  await onRetry();
+                } catch (e) {
+                  setRetrying(false);
+                  setRetryError(e instanceof ApiError ? e.jobError.user_message : "Retry failed.");
+                }
+              }}
+            >
+              {retrying ? "Starting…" : "Retry from this step"}
+            </Button>
+          )}
+        </div>
+      )}
+
+      {skipped.length > 0 && (
+        <div role="status" className="flex flex-wrap items-center gap-x-2 border-b border-line bg-raised px-4 py-1.5 text-xs text-ink-2">
+          <Icon.info className="size-3.5 shrink-0" />
+          {skipped.map((s) => (
+            <span key={s.label}>
+              <span className="font-medium text-ink">{s.label} skipped</span> · {s.reason}
+            </span>
+          ))}
         </div>
       )}
 

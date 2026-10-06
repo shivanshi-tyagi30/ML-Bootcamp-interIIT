@@ -6,9 +6,10 @@ import asyncio
 import logging
 import re
 import threading
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Callable, Protocol
 
 from app.config import Settings
+from app.core.errors import JobCancelled as Cancelled
 from app.core.errors import PipelineError
 from app.core.stages import Stage
 
@@ -23,7 +24,10 @@ class STT(Protocol):
 
     name: str
 
-    def transcribe(self, path: str, initial_prompt: str | None) -> dict[str, Any]:
+    def transcribe(
+        self, path: str, initial_prompt: str | None, progress: Callable[[float], None] | None = None,
+        should_stop: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
         """Return {language, language_probability, segments:[{start,end,text,avg_logprob,
         no_speech_prob,compression_ratio,words:[{w,start,end,conf}]}]}."""
         ...
@@ -35,7 +39,8 @@ class WhisperSTT:
     def __init__(self, settings: Settings) -> None:
         """Remember settings; the model loads lazily."""
         self.settings = settings
-        self.name = f"faster-whisper {settings.WHISPER_MODEL}"
+        self.rt = settings.whisper_runtime()
+        self.name = f"faster-whisper {self.rt['model']} ({self.rt['device']}, {self.rt['compute_type']})"
         self._model: Any = None
         self._lock = threading.Lock()
 
@@ -50,19 +55,31 @@ class WhisperSTT:
             if self._model is None:
                 from faster_whisper import WhisperModel
 
-                s = self.settings
-                self._model = WhisperModel(s.WHISPER_MODEL, device=s.WHISPER_DEVICE, compute_type=s.WHISPER_COMPUTE_TYPE)
+                rt = self.rt
+                log.info("loading Whisper %s on %s (%s)", rt["model"], rt["device"], rt["compute_type"])
+                self._model = WhisperModel(
+                    str(rt["model"]), device=str(rt["device"]), compute_type=str(rt["compute_type"]),
+                    cpu_threads=int(rt["cpu_threads"]),
+                )
             return self._model
 
-    def transcribe(self, path: str, initial_prompt: str | None) -> dict[str, Any]:
-        """Transcribe with word timestamps (spec parameters)."""
+    def transcribe(
+        self, path: str, initial_prompt: str | None, progress: Callable[[float], None] | None = None,
+        should_stop: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        """Transcribe with word timestamps; beam size is 5 on GPU and 1 on CPU unless set."""
         model = self._load()
         segments, info = model.transcribe(
-            path, language=None, task="transcribe", beam_size=5, temperature=0.0, word_timestamps=True,
-            vad_filter=True, condition_on_previous_text=False, initial_prompt=initial_prompt,
+            path, language=None, task="transcribe", beam_size=int(self.rt["beam_size"]), temperature=0.0,
+            word_timestamps=True, vad_filter=True, condition_on_previous_text=False, initial_prompt=initial_prompt,
         )
+        total = float(getattr(info, "duration", 0) or 0)
         out = []
-        for s in segments:
+        for s in segments:  # a lazy generator: decoding happens as we iterate
+            if should_stop and should_stop():
+                raise Cancelled()
+            if progress and total:
+                progress(min(1.0, s.end / total))
             out.append({
                 "start": s.start, "end": s.end, "text": s.text.strip(), "avg_logprob": s.avg_logprob,
                 "no_speech_prob": s.no_speech_prob, "compression_ratio": s.compression_ratio,
@@ -113,6 +130,12 @@ def apply_hallucination_guards(segments: list[dict[str, Any]]) -> tuple[list[dic
     return kept, dropped
 
 
+def _mmss(sec: float) -> str:
+    """m:ss."""
+    t = int(max(0, sec))
+    return f"{t // 60}:{t % 60:02d}"
+
+
 _default: WhisperSTT | None = None
 
 
@@ -128,8 +151,20 @@ async def transcribe(ctx: "JobContext") -> None:
     """Stage function: write 03_whisper.json."""
     stt = ctx.services.stt or default_stt(ctx.settings)
     prompt = glossary_prompt(ctx.upload.get("glossary", []))
+    if not getattr(stt, "loaded", True):
+        await ctx.progress(0.0, "Loading the speech model (the first run downloads it, 1-3 GB)")
+    duration = float((ctx.read(ctx.output_name(Stage.NORMALIZING)) or {}).get("duration_s") or 0)
+
+    def report(frac: float) -> None:
+        done = f" ({_mmss(frac * duration)} of {_mmss(duration)})" if duration else ""
+        ctx.progress_threadsafe(frac, f"Transcribing{done}")
+
     try:
-        result = await asyncio.to_thread(stt.transcribe, str(ctx.wav_path), prompt)
+        result = await asyncio.to_thread(
+            stt.transcribe, str(ctx.wav_path), prompt, progress=report, should_stop=ctx.cancel_requested,
+        )
+    except Cancelled:
+        raise
     except PipelineError:
         raise
     except Exception as e:  # noqa: BLE001 - any model failure is E_STT_FAILED

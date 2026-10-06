@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from app.config import Settings
+from app.core.errors import JobCancelled
 from app.core.stages import Stage
 from app.core.text import MODAL, NEG, NUM, FILLERS, capitalized_non_initial, normalize_number
 
@@ -163,8 +164,19 @@ def align(whisper: list[dict[str, Any]], other: list[dict[str, Any]]) -> dict[in
     return updates
 
 
+def low_confidence_fallback(segments: list[dict[str, Any]], threshold: float) -> dict[str, dict[str, Any]]:
+    """Without a second model, mark Whisper words below `threshold` as disputed (plan section 16 fallback)."""
+    if threshold <= 0:
+        return {}
+    return {
+        str(i): {"disputed": True, "alt": None}
+        for i, w in enumerate(flatten_words(segments)) if float(w.get("conf", 1)) < threshold
+    }
+
+
 def run_recheck(
     wav: Path, segments: list[dict[str, Any]], asr: RecheckASR, settings: Settings, seed: str, tmp_dir: Path,
+    should_stop: Any = None,
 ) -> dict[str, Any]:
     """Re-decode flagged spans and return per-word updates keyed by global word index."""
     import soundfile as sf
@@ -177,6 +189,8 @@ def run_recheck(
     report = []
     try:
         for k, sp in enumerate(spans):
+            if should_stop and should_stop():
+                raise JobCancelled()
             c0 = max(0.0, sp["start"] - settings.RECHECK_PAD_SEC)
             c1 = sp["end"] + settings.RECHECK_PAD_SEC
             clip = tmp_dir / f"span_{k:04d}.wav"
@@ -203,23 +217,32 @@ def run_recheck(
 
 
 async def recheck(ctx: "JobContext") -> None:
-    """Stage function: write 04_recheck.json (never fails; skips when unavailable)."""
+    """Stage function: write 04_recheck.json (never fails; falls back to low-confidence disputes)."""
     out_name = ctx.output_name(Stage.RECHECKING)
+    segments = ctx.read(ctx.output_name(Stage.TRANSCRIBING))["segments"]
+
+    def skipped(reason: str) -> dict[str, Any]:
+        updates = low_confidence_fallback(segments, ctx.settings.LOWCONF_DISPUTE_THRESHOLD)
+        return {"skipped": True, "reason": reason, "fallback": "low_confidence" if updates else None,
+                "word_updates": updates, "disputed_count": len(updates)}
+
     if not ctx.settings.RECHECK_ENABLED:
-        ctx.write(out_name, {"skipped": True, "reason": "disabled", "word_updates": {}})
+        ctx.write(out_name, skipped("turned off (RECHECK_ENABLED=false)"))
         return
     try:
         asr = ctx.services.recheck_asr or default_asr(ctx.settings)
     except ImportError:
         ctx.log.warning("NeMo not installed; skipping the Parakeet re-check")
-        ctx.write(out_name, {"skipped": True, "reason": "nemo_unavailable", "word_updates": {}})
+        ctx.write(out_name, skipped("NeMo is not installed"))
         return
-    segments = ctx.read(ctx.output_name(Stage.TRANSCRIBING))["segments"]
     try:
         result = await asyncio.to_thread(
-            run_recheck, ctx.wav_path, segments, asr, ctx.settings, ctx.job_id, ctx.dir / "tmp"
+            run_recheck, ctx.wav_path, segments, asr, ctx.settings, ctx.job_id, ctx.dir / "tmp",
+            ctx.cancel_requested,
         )
+    except JobCancelled:
+        raise
     except Exception as e:  # noqa: BLE001 - this stage never fails the job
         ctx.log.exception("re-check failed; continuing without it")
-        result = {"skipped": True, "reason": f"error: {e!r}", "word_updates": {}}
+        result = skipped(f"error: {str(e)[:120]}")
     ctx.write(out_name, result)

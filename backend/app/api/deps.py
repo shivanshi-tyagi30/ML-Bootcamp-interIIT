@@ -29,13 +29,18 @@ class AppState:
     services: Services
     runner: Runner
     active_uploads: int = 0
-    tasks: set[asyncio.Task[Any]] = field(default_factory=set)
+    tasks: dict[str, asyncio.Task[Any]] = field(default_factory=dict)
 
     def schedule(self, job_id: str) -> None:
         """Start a job in the background, keeping a reference so it isn't garbage-collected."""
         task = asyncio.create_task(self.runner(job_id))
-        self.tasks.add(task)
-        task.add_done_callback(self.tasks.discard)
+        self.tasks[job_id] = task
+        task.add_done_callback(lambda t: self.tasks.pop(job_id, None) if self.tasks.get(job_id) is t else None)
+
+    def task_for(self, job_id: str) -> asyncio.Task[Any] | None:
+        """The running task of a job, if any."""
+        t = self.tasks.get(job_id)
+        return t if t is not None and not t.done() else None
 
 
 def get_state(request: Request) -> AppState:

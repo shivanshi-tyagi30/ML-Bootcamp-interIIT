@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from app.models.record import CitedSentence, EditCategory, MinutesTopic, Pointer
+from app.models.record import EditCategory, Pointer
 
 
 class VocabularyTerm(BaseModel):
@@ -40,40 +40,65 @@ class LM1Output(BaseModel):
     edits: list[LM1Edit] = []
 
 
+class LM2Sentence(BaseModel):
+    """A summary/minutes sentence as LM2 returns it; uncited sentences are dropped by the verifier."""
+
+    text: str
+    evidence_segment_ids: list[str] = []
+
+
+class LM2Topic(BaseModel):
+    """A minutes topic as LM2 returns it."""
+
+    topic: str
+    points: list[LM2Sentence] = []
+
+
 class LM2Task(BaseModel):
     """A task as LM2 returns it: pointers, never typed owner/deadline."""
 
     task: str
     owner_evidence: Pointer | None = None
     deadline_evidence: Pointer | None = None
-    evidence_quote: str
-    evidence_segment_ids: list[str]
+    evidence_quote: str = ""
+    evidence_segment_ids: list[str] = []
 
 
 class LM2Decision(BaseModel):
     """A decision as LM2 returns it."""
 
     decision: str
-    agreement_evidence: str
-    evidence_segment_ids: list[str]
+    agreement_evidence: str = ""
+    evidence_segment_ids: list[str] = []
 
 
 class LM2Proposal(BaseModel):
     """An open proposal as LM2 returns it."""
 
     proposal: str
-    evidence_segment_ids: list[str]
+    evidence_segment_ids: list[str] = []
+
+
+class LM2Record(BaseModel):
+    """LM2 output without a scratchpad (LM2_SCRATCHPAD=false). Missing lists count as empty; the verifier
+    removes anything that is not properly cited, so a small slip no longer fails the whole job."""
+
+    summary: list[LM2Sentence] = []
+    minutes: list[LM2Topic] = []
+    decisions: list[LM2Decision] = []
+    open_proposals: list[LM2Proposal] = []
+    action_items: list[LM2Task] = []
 
 
 class LM2Output(BaseModel):
-    """LM2 output. `scratchpad` is discarded after parsing."""
+    """LM2 output with the reasoning scratchpad first (generated before the record); discarded after parsing."""
 
     scratchpad: str = ""
-    summary: list[CitedSentence]
-    minutes: list[MinutesTopic]
-    decisions: list[LM2Decision]
-    open_proposals: list[LM2Proposal]
-    action_items: list[LM2Task]
+    summary: list[LM2Sentence] = []
+    minutes: list[LM2Topic] = []
+    decisions: list[LM2Decision] = []
+    open_proposals: list[LM2Proposal] = []
+    action_items: list[LM2Task] = []
 
 
 class SummaryPick(BaseModel):

@@ -17,6 +17,9 @@ export const ERROR_MESSAGES: Record<ErrorCode, string> = {
   E_BUSY: "The server is busy with other uploads. Please try again in a moment.",
   E_NOT_FOUND: "This meeting could not be found.",
   E_JOB_RUNNING: "This meeting is still being processed. Try again when it has finished.",
+  E_CANCELLED: "Processing was cancelled.",
+  E_FFMPEG_MISSING:
+    "ffmpeg is not installed on the server, so the audio can't be converted. Install ffmpeg and restart the backend.",
   E_INTERNAL: "Something unexpected went wrong. Please try again.",
   E_NETWORK: "Couldn't reach the server. Check that the backend is running.",
 };

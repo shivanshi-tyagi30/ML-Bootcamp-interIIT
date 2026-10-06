@@ -14,13 +14,13 @@ from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
 from app.api.deps import AppState, error_response, get_job_or_none, get_state
-from app.core.errors import PipelineError
+from app.core.errors import PipelineError, user_message
 from app.core.events import TERMINAL
 from app.core.stages import STAGE_MESSAGES, STAGE_OUTPUT, Stage
 from app.core.storage import job_dir, read_json, write_json
 from app.models.api import CreateJobResponse, JobDetail, JobList, JobSummary, PartialResults, RenameRequest
 from app.models.record import MeetingRecord, Refinement, Segment
-from app.pipeline.runner import dump_event, rename_record
+from app.pipeline.runner import dump_event, rename_record, request_cancel
 from app.pipeline.validate import extension_of, stream_upload, validate_file
 
 router = APIRouter(prefix="/api", tags=["jobs"])
@@ -132,7 +132,8 @@ def snapshot_event(row: dict[str, Any], d: Path) -> dict[str, Any]:
         "warnings": [],
     }
     if status == "failed":
-        ev.update(error_code=row.get("error_code"), error_message=row.get("error_message"))
+        ev.update(error_code=row.get("error_code"), error_message=row.get("error_message"),
+                  error_detail=row.get("error_detail"))
     return ev
 
 
@@ -189,3 +190,44 @@ async def delete_job(job_id: str, state: AppState = Depends(get_state)) -> Any:
     await state.db.delete(job_id)
     state.bus.forget(job_id)
     return Response(status_code=204)
+
+
+@router.post("/jobs/{job_id}/cancel", response_model=JobSummary)
+async def cancel_job(job_id: str, state: AppState = Depends(get_state)) -> Any:
+    """Stop a queued or running job. Finished stages stay saved, so Retry continues from there."""
+    row = await get_job_or_none(state, job_id)
+    if row is None:
+        return error_response("E_NOT_FOUND")
+    if row["status"] in ("queued", "running"):
+        request_cancel(job_id)
+        task = state.task_for(job_id)
+        if task is not None:
+            task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=5)
+            except (asyncio.CancelledError, asyncio.TimeoutError, Exception):  # noqa: BLE001
+                pass
+        row = await state.db.get(job_id) or row
+        if row["status"] in ("queued", "running"):  # no live task (e.g. stale row): fail it directly
+            await state.db.update(job_id, status="failed", stage="failed", error_code="E_CANCELLED",
+                                  error_message=user_message("E_CANCELLED"), error_detail="Cancelled by the user.")
+            row = await state.db.get(job_id) or row
+            ev = snapshot_event(row, job_dir(state.settings.jobs_dir, job_id))
+            state.bus.publish(job_id, ev)
+    return JobSummary.from_row(row)
+
+
+@router.post("/jobs/{job_id}/retry", status_code=202, response_model=JobSummary)
+async def retry_job(job_id: str, state: AppState = Depends(get_state)) -> Any:
+    """Run a failed or cancelled job again, resuming after the last saved stage."""
+    row = await get_job_or_none(state, job_id)
+    if row is None:
+        return error_response("E_NOT_FOUND")
+    if row["status"] in ("queued", "running") or state.task_for(job_id) is not None:
+        return error_response("E_JOB_RUNNING")
+    if row["status"] == "completed":
+        return JobSummary.from_row(row)
+    await state.db.update(job_id, status="queued", stage="queued", error_code=None, error_message=None,
+                          error_detail=None)
+    state.schedule(job_id)
+    return JobSummary.from_row(await state.db.get(job_id))  # type: ignore[arg-type]

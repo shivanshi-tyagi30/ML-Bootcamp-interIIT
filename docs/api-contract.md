@@ -15,6 +15,10 @@ relies on.
 - **Results** `GET /api/jobs/{id}` → `{"job", "record", "partial"}`. With no record (still running, or LM2 failed)
   the UI builds a partial view from `partial.raw_transcript`, `partial.refined_transcript` and `partial.refinement`.
 - **History** `GET /api/jobs`, `PATCH /api/jobs/{id}` (rename), `DELETE /api/jobs/{id}` (409 while processing).
+- **Cancel / retry** `POST /api/jobs/{id}/cancel` (queued or running → failed with `E_CANCELLED`) and
+  `POST /api/jobs/{id}/retry` (failed → queued, resumes after the last saved stage). Both return a JobSummary.
+- **Error detail** failed jobs carry `error_detail` (JobSummary and SSE), shown under the message.
+- **Health** `GET /api/health` → `ffmpeg`, `llm.reachable`, `llm.missing` drive the upload screen's setup check.
 - **Audio** `GET /api/jobs/{id}/audio` with HTTP Range. Files picked in the current session play from the browser.
 - **Downloads** `GET /api/jobs/{id}/export?fmt=json|md|docx|txt_raw|txt_refined`.
 

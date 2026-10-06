@@ -12,7 +12,28 @@ from app.core.stages import Stage
 if TYPE_CHECKING:
     from app.pipeline.runner import JobContext
 
-PIPELINE_ID = "pyannote/speaker-diarization-3.1"
+PIPELINE_V3 = "pyannote/speaker-diarization-3.1"
+PIPELINE_V4 = "pyannote/speaker-diarization-community-1"
+
+
+def pipeline_id() -> str:
+    """community-1 on pyannote.audio 4+, 3.1 on older versions."""
+    try:
+        import pyannote.audio
+
+        major = int(str(getattr(pyannote.audio, "__version__", "3")).split(".")[0])
+    except (ImportError, ValueError):
+        major = 3
+    return PIPELINE_V4 if major >= 4 else PIPELINE_V3
+
+
+def friendly_reason(e: Exception) -> str:
+    """Short, actionable reason for a failed diarization."""
+    msg = str(e)
+    if "403" in msg or "gated" in msg.lower() or "401" in msg:
+        return (f"Hugging Face access not granted: accept the terms on huggingface.co/{pipeline_id()} "
+                "and huggingface.co/pyannote/segmentation-3.0, and check HF_TOKEN")
+    return msg[:160] or repr(e)
 
 
 class Diarizer(Protocol):
@@ -32,7 +53,7 @@ class PyannoteDiarizer:
         """Import pyannote now (raises ImportError if missing)."""
         import pyannote.audio  # noqa: F401
 
-        self.name = PIPELINE_ID
+        self.name = pipeline_id()
         self.token = token
         self._pipe: Any = None
         self._lock = threading.Lock()
@@ -49,9 +70,11 @@ class PyannoteDiarizer:
         with self._lock:
             if self._pipe is None:
                 try:
-                    self._pipe = Pipeline.from_pretrained(PIPELINE_ID, use_auth_token=self.token)
-                except TypeError:  # pyannote >= 4 renamed the argument
-                    self._pipe = Pipeline.from_pretrained(PIPELINE_ID, token=self.token)
+                    self._pipe = Pipeline.from_pretrained(self.name, token=self.token)
+                except TypeError:  # pyannote 3 used use_auth_token
+                    self._pipe = Pipeline.from_pretrained(self.name, use_auth_token=self.token)
+                if self._pipe is None:
+                    raise PermissionError("403 gated model")
                 try:
                     import torch
 
@@ -92,13 +115,20 @@ async def diarize(ctx: "JobContext") -> None:
     """Stage function: write 05_diarization.json (never fails; skips when off or unavailable)."""
     out_name = ctx.output_name(Stage.DIARIZING)
     s = ctx.settings
-    if ctx.services.diarizer is None and not (s.DIARIZATION_ENABLED and s.HF_TOKEN):
-        ctx.write(out_name, {"skipped": True, "reason": "disabled", "turns": []})
+    if ctx.services.diarizer is None and not s.DIARIZATION_ENABLED:
+        ctx.write(out_name, {"skipped": True, "reason": "turned off (DIARIZATION_ENABLED=false)", "turns": []})
+        return
+    if ctx.services.diarizer is None and not s.HF_TOKEN:
+        ctx.write(out_name, {"skipped": True, "reason": "HF_TOKEN is not set", "turns": []})
         return
     try:
         d = ctx.services.diarizer or default_diarizer(s)
+        if not getattr(d, "loaded", True):
+            await ctx.progress(0.0, "Loading the speaker model (first run downloads it)")
         turns = relabel(await asyncio.to_thread(d.run, str(ctx.wav_path)))
         ctx.write(out_name, {"skipped": False, "model": d.name, "turns": turns})
+    except ImportError:
+        ctx.write(out_name, {"skipped": True, "reason": "pyannote.audio is not installed", "turns": []})
     except Exception as e:  # noqa: BLE001 - this stage never fails the job
         ctx.log.warning("diarization skipped: %r", e)
-        ctx.write(out_name, {"skipped": True, "reason": f"error: {e!r}", "turns": []})
+        ctx.write(out_name, {"skipped": True, "reason": friendly_reason(e), "turns": []})

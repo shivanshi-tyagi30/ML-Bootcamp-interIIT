@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,7 +13,7 @@ from typing import Any, Awaitable, Callable
 
 from app.config import Settings
 from app.core.db import JobDB
-from app.core.errors import PipelineError, user_message
+from app.core.errors import JobCancelled, PipelineError, user_message
 from app.core.events import EventBus
 from app.core.stages import PIPELINE_STAGES, STAGE_MESSAGES, STAGE_OUTPUT, Stage, overall_progress
 from app.core.storage import job_dir, read_json, write_json
@@ -75,6 +76,12 @@ class JobContext:
         self.log = JobLog(log, {"job_id": job_id})
         self._llm: JSONLLM | None = services.llm
         self._timings: dict[str, float] = read_json(self.dir / "timings.json") or {}
+        self.cancel_event = CANCEL_EVENTS.setdefault(job_id, threading.Event())
+        self.loop: asyncio.AbstractEventLoop | None = None
+
+    def cancel_requested(self) -> bool:
+        """Checked by worker threads at safe points."""
+        return self.cancel_event.is_set()
 
     # ---- paths and files
     @property
@@ -109,7 +116,10 @@ class JobContext:
         """LLM client (created on first use)."""
         if self._llm is None:
             s = self.settings
-            self._llm = LLMClient(s.LLM_BASE_URL, s.LLM_BACKEND, s.LLM_TIMEOUT_SEC, {s.LM2_MODEL: s.LM2_BASE_URL})
+            self._llm = LLMClient(
+                s.LLM_BASE_URL, s.LLM_BACKEND, s.LLM_TIMEOUT_SEC, {s.LM2_MODEL: s.LM2_BASE_URL},
+                max_context=s.LLM_MAX_CONTEXT, keep_alive=s.OLLAMA_KEEP_ALIVE,
+            )
         return self._llm
 
     def add_warning(self, code: str) -> None:
@@ -149,6 +159,11 @@ class JobContext:
         """Report progress inside the current stage."""
         self.bus.publish(self.job_id, self.event("running", within, message))
 
+    def progress_threadsafe(self, within: float, message: str) -> None:
+        """Report progress from a worker thread (e.g. while Whisper decodes)."""
+        if self.loop is not None:
+            self.loop.call_soon_threadsafe(self.bus.publish, self.job_id, self.event("running", within, message))
+
     def record_timing(self, stage: Stage, seconds: float) -> None:
         """Store a stage duration in timings.json."""
         self._timings[stage.value] = round(seconds, 2)
@@ -158,18 +173,19 @@ class JobContext:
         """Mark the job completed."""
         self.stage = Stage.COMPLETED
         await self.db.update(self.job_id, status="completed", stage=Stage.COMPLETED.value, error_code=None,
-                             error_message=None)
+                             error_message=None, error_detail=None)
         self.bus.publish(self.job_id, self.event("completed"))
 
     async def fail(self, code: str, stage: Stage, message: str, detail: str = "") -> None:
         """Mark the job failed; earlier outputs stay available."""
         self.log.error("failed at %s: %s %s", stage.value, code, detail)
         failed_at = stage
+        hint = detail_for_user(detail)
         await self.db.update(self.job_id, status="failed", stage=Stage.FAILED.value, error_code=code,
-                             error_message=message)
+                             error_message=message, error_detail=hint)
         self.stage = failed_at
         self.bus.publish(self.job_id, self.event("failed", error_code=code, error_message=message,
-                                                 failed_stage=failed_at.value))
+                                                 error_detail=hint, failed_stage=failed_at.value))
 
 
 async def render(ctx: JobContext) -> None:
@@ -195,6 +211,22 @@ assert [s for s, _ in PIPELINE] == PIPELINE_STAGES
 # One job on the GPU at a time. Created per event loop (tests use several loops).
 _locks: dict[int, asyncio.Semaphore] = {}
 
+# job_id -> event set when the user cancels; worker threads poll it.
+CANCEL_EVENTS: dict[str, threading.Event] = {}
+
+
+def detail_for_user(detail: str) -> str | None:
+    """A short technical reason shown under the error message (no stack traces)."""
+    detail = (detail or "").strip()
+    if not detail:
+        return None
+    return detail if len(detail) <= 300 else detail[:297] + "..."
+
+
+def request_cancel(job_id: str) -> None:
+    """Ask a running job to stop at the next safe point."""
+    CANCEL_EVENTS.setdefault(job_id, threading.Event()).set()
+
 
 def gpu_lock() -> asyncio.Semaphore:
     """The global GPU semaphore for the running event loop."""
@@ -204,14 +236,18 @@ def gpu_lock() -> asyncio.Semaphore:
 
 async def run_job(job_id: str, settings: Settings, db: JobDB, bus: EventBus, services: Services) -> None:
     """Run (or resume) a job through every stage."""
+    CANCEL_EVENTS[job_id] = threading.Event()  # fresh flag for this run (also on Retry)
     ctx = JobContext(job_id, settings, db, bus, services)
+    ctx.loop = asyncio.get_running_loop()
     whisper = ctx.read(STAGE_OUTPUT[Stage.TRANSCRIBING]) or {}
     for w in whisper.get("warnings", []):
         ctx.add_warning(w)
-    await ctx.queued()
-    async with gpu_lock():
-        try:
+    try:
+        await ctx.queued()
+        async with gpu_lock():
             for stage, fn in PIPELINE:
+                if ctx.cancel_requested():
+                    raise JobCancelled()
                 if ctx.stage_done(stage):
                     continue
                 await ctx.set_stage(stage)
@@ -221,11 +257,16 @@ async def run_job(job_id: str, settings: Settings, db: JobDB, bus: EventBus, ser
                 ctx.record_timing(stage, time.perf_counter() - t0)
                 ctx.log.info("stage %s done in %.1fs", stage.value, time.perf_counter() - t0)
             await ctx.complete()
-        except PipelineError as e:
-            await ctx.fail(e.code, e.stage, e.user_message, e.detail)
-        except Exception as e:  # noqa: BLE001
-            ctx.log.exception("job crashed")
-            await ctx.fail("E_INTERNAL", ctx.stage, user_message("E_INTERNAL"), repr(e))
+    except (JobCancelled, asyncio.CancelledError):
+        ctx.log.info("job cancelled at %s", ctx.stage.value)
+        await ctx.fail("E_CANCELLED", ctx.stage, user_message("E_CANCELLED"), "Cancelled by the user.")
+    except PipelineError as e:
+        await ctx.fail(e.code, e.stage, e.user_message, e.detail)
+    except Exception as e:  # noqa: BLE001
+        ctx.log.exception("job crashed")
+        await ctx.fail("E_INTERNAL", ctx.stage, user_message("E_INTERNAL"), repr(e))
+    finally:
+        CANCEL_EVENTS.pop(job_id, None)
 
 
 def rename_record(jobs_dir: Path, job_id: str, title: str) -> bool:
