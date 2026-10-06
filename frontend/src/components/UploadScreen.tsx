@@ -1,9 +1,11 @@
 import { useRef, useState } from "react";
 import { ACCEPTED_EXTENSIONS, MAX_UPLOAD_MB, precheckFile } from "../lib/errors";
+import type { Api } from "../lib/api";
 import type { JobError } from "../lib/types";
 import { DatePill } from "./landing/DatePill";
 import { HeroIllustration } from "./landing/HeroIllustration";
 import { PixelWord } from "./landing/PixelWord";
+import { RecentMeetings } from "./RecentMeetings";
 import { Brand, Icon, cx } from "./ui";
 
 interface Props {
@@ -12,7 +14,9 @@ interface Props {
   mock: boolean;
   theme: "light" | "dark";
   onTheme: () => void;
-  onStart: (file: File, glossary: string) => void;
+  api: Api;
+  onStart: (file: File, opts: { title: string; glossary: string }) => void;
+  onOpenJob: (jobId: string) => void;
   onSample: () => void;
   onClearError: () => void;
 }
@@ -30,8 +34,9 @@ function Promise_({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function UploadScreen({ error, busy, mock, theme, onTheme, onStart, onSample, onClearError }: Props) {
+export function UploadScreen({ error, busy, mock, theme, onTheme, api, onStart, onOpenJob, onSample, onClearError }: Props) {
   const [file, setFile] = useState<File | null>(null);
+  const [title, setTitle] = useState("");
   const [glossary, setGlossary] = useState("");
   const [drag, setDrag] = useState(false);
   const [localError, setLocalError] = useState<JobError | null>(null);
@@ -138,7 +143,21 @@ export function UploadScreen({ error, busy, mock, theme, onTheme, onStart, onSam
               </span>
             </label>
 
-            <div className="mx-3 mb-3">
+            <div className="mx-3 mb-3 grid gap-3 sm:grid-cols-2">
+              <div>
+              <label htmlFor="title" className="font-mono text-[10.5px] tracking-[0.14em] text-ink-3">
+                MEETING NAME · OPTIONAL
+              </label>
+              <input
+                id="title"
+                value={title}
+                maxLength={100}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder={file ? file.name : "e.g. Sprint planning, week 41"}
+                className="mt-1 h-9 w-full border-b border-line bg-transparent text-[14px] placeholder:text-ink-3/80 focus:border-ink focus:outline-none"
+              />
+              </div>
+              <div>
               <label htmlFor="glossary" className="font-mono text-[10.5px] tracking-[0.14em] text-ink-3">
                 EXPECTED TERMS · OPTIONAL
               </label>
@@ -146,9 +165,10 @@ export function UploadScreen({ error, busy, mock, theme, onTheme, onStart, onSam
                 id="glossary"
                 value={glossary}
                 onChange={(e) => setGlossary(e.target.value)}
-                placeholder="Names and jargon, e.g. Priya, Kubernetes, RAG"
+                placeholder="e.g. Priya, Kubernetes, RAG"
                 className="mt-1 h-9 w-full border-b border-line bg-transparent text-[14px] placeholder:text-ink-3/80 focus:border-ink focus:outline-none"
               />
+              </div>
             </div>
 
             <div className="flex items-center justify-between gap-3 border-t border-ink px-3 py-3">
@@ -162,7 +182,7 @@ export function UploadScreen({ error, busy, mock, theme, onTheme, onStart, onSam
               <button
                 disabled={!!localError || busy}
                 // With no file yet, the button opens the file picker instead.
-                onClick={() => (file ? onStart(file, glossary) : input.current?.click())}
+                onClick={() => (file ? onStart(file, { title, glossary }) : input.current?.click())}
                 className="inline-flex h-10 items-center gap-2 bg-accent px-5 text-[14px] font-bold text-accent-ink transition hover:bg-ink hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {busy ? "Uploading…" : file ? "Start processing" : "Choose a recording"}
@@ -183,6 +203,8 @@ export function UploadScreen({ error, busy, mock, theme, onTheme, onStart, onSam
               </button>
             </div>
           )}
+
+          <RecentMeetings api={api} onOpen={onOpenJob} />
 
           <div className="mt-10 flex flex-col items-end gap-5 lg:hidden">
             <Promise_ label="Owners & deadlines" value="only when stated" />

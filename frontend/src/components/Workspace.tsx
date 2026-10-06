@@ -115,7 +115,7 @@ export function Workspace({ api, jobId, record, audioUrl, error, theme, onTheme,
       <header className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-ink bg-surface px-4 py-2.5">
         <Brand compact />
         <div className="min-w-0 flex-1 border-l border-line pl-5">
-          <div className="truncate text-[15px] font-bold tracking-[-0.01em]">{record.meta.source_file ?? "Recording"}</div>
+          <div className="truncate text-[15px] font-bold tracking-[-0.01em]">{record.meta.title ?? record.meta.source_file ?? "Recording"}</div>
           <div className="truncate font-mono text-[10.5px] text-ink-3">
             {fmtTime(record.meta.duration_s ?? audio.duration)}
             {(m.stt || m.lm1 || m.lm2) && (
@@ -143,6 +143,12 @@ export function Workspace({ api, jobId, record, audioUrl, error, theme, onTheme,
           <Icon.plus /> New recording
         </Button>
       </header>
+
+      {record.meta.warnings?.includes("W_NON_ENGLISH") && (
+        <div role="status" className="border-b border-warn/30 bg-warn-soft px-4 py-2 text-sm text-warn">
+          This recording may not be in English; results may be less accurate.
+        </div>
+      )}
 
       {error && record.summary == null && (
         <div role="alert" className="flex items-center gap-2 border-b border-bad/30 bg-bad-soft px-4 py-2 text-sm text-bad">

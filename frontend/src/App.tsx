@@ -32,35 +32,49 @@ export default function App() {
   const [view, setView] = useState<View>({ name: "upload" });
   const [uploadError, setUploadError] = useState<JobError | null>(null);
   const [busy, setBusy] = useState(false);
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  // Audio picked in this session plays from the browser; past meetings stream from the backend.
+  const [local, setLocal] = useState<{ jobId: string | null; url: string } | null>(null);
   const [theme, toggleTheme] = useTheme();
 
-  // The original file plays from the browser; the backend never needs to serve it.
-  const setAudio = useCallback((file: File | null) => {
-    setAudioUrl((old) => {
-      if (old) URL.revokeObjectURL(old);
-      return file ? URL.createObjectURL(file) : null;
+  const setAudio = useCallback((file: File | null, jobId: string | null = null) => {
+    setLocal((old) => {
+      if (old) URL.revokeObjectURL(old.url);
+      return file ? { jobId, url: URL.createObjectURL(file) } : null;
     });
   }, []);
+  const audioFor = (jobId: string) => (local?.jobId === jobId ? local.url : api.audioUrl(jobId));
 
-  const start = async (file: File, glossary: string) => {
+  const openJob = async (jobId: string) => {
+    setUploadError(null);
+    try {
+      const s = await api.getJob(jobId);
+      const finished = s.stage === "completed" || s.stage === "failed";
+      if (!finished) {
+        setView({ name: "processing", jobId, fileName: s.record.meta.title ?? s.record.meta.source_file ?? "recording" });
+      } else if (s.error && !s.record.raw_transcript?.length) {
+        setUploadError(s.error);
+      } else {
+        setView({ name: "workspace", jobId, record: s.record, error: s.error ?? undefined });
+      }
+    } catch (e) {
+      setUploadError(e instanceof ApiError ? e.jobError : makeError("E_INTERNAL"));
+    }
+  };
+
+  const start = async (file: File, opts: { title: string; glossary: string }) => {
     setBusy(true);
     setUploadError(null);
     try {
-      const jobId = await api.createJob(file, glossary);
-      setAudio(file);
-      setView({ name: "processing", jobId, fileName: file.name });
+      const { jobId, cached } = await api.createJob(file, opts);
+      setAudio(file, jobId);
+      // The same recording was processed before: open the saved result.
+      if (cached) await openJob(jobId);
+      else setView({ name: "processing", jobId, fileName: opts.title.trim() || file.name });
     } catch (e) {
       setUploadError(e instanceof ApiError ? e.jobError : makeError("E_INTERNAL"));
     } finally {
       setBusy(false);
     }
-  };
-
-  const openSample = async () => {
-    const s = await api.getJob("sample");
-    setAudio(null);
-    setView({ name: "workspace", jobId: "sample", record: s.record });
   };
 
   if (view.name === "processing")
@@ -85,7 +99,7 @@ export default function App() {
         api={api}
         jobId={view.jobId}
         record={view.record}
-        audioUrl={audioUrl}
+        audioUrl={audioFor(view.jobId)}
         error={view.error}
         theme={theme}
         onTheme={toggleTheme}
@@ -103,8 +117,10 @@ export default function App() {
       mock={api.mock}
       theme={theme}
       onTheme={toggleTheme}
+      api={api}
       onStart={start}
-      onSample={openSample}
+      onOpenJob={openJob}
+      onSample={() => openJob("sample")}
       onClearError={() => setUploadError(null)}
     />
   );

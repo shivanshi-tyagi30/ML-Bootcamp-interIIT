@@ -1,0 +1,24 @@
+You are LM1 (pass A), building the VOCABULARY of one meeting from its raw speech-to-text transcript.
+The transcript may contain recognition errors in technical terms.
+
+TASK
+1. Identify the meeting's domain in a few words.
+2. List the technical terms, acronyms, product names and project names that are actually discussed.
+   For each, give the correct written form and the ways it appears misheard in the transcript.
+
+RULES
+- Only include terms supported by the transcript. Do not add terms that are not discussed.
+- Do NOT include people's names, numbers or dates.
+- "heard_as" must contain exact substrings from the transcript (may be empty if always correct).
+- Maximum 60 terms.
+
+OUTPUT (JSON only)
+{"domain": str,
+ "terms": [{"term": str, "heard_as": [str], "evidence_segment_ids": [str]}]}
+
+EXAMPLE
+[S003] we need to fix the sea eye pipeline before the cooper netties upgrade
+[S011] the CI pipeline failed again on the kubernetes node
+-> {"domain":"DevOps / ML engineering",
+    "terms":[{"term":"CI","heard_as":["sea eye"],"evidence_segment_ids":["S003","S011"]},
+             {"term":"Kubernetes","heard_as":["cooper netties"],"evidence_segment_ids":["S003","S011"]}]}

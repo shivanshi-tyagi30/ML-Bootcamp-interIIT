@@ -73,6 +73,8 @@ export const REJECT_REASONS: Record<string, string> = {
   negation_changed: "it would add or remove a negation",
   over_rewrite: "the replacement is far longer than the original",
   not_sound_alike: "the replacement doesn't sound like what was said",
+  modal_changed: "it would change a word like will, might or should",
+  name_changed: "it would change a person's name",
+  touches_disputed_frozen: "it touches an unclear number, negation or modal",
   low_confidence: "the model wasn't confident enough",
-  frozen_token: "it touches a protected word (name, date, modal)",
 };

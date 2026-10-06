@@ -53,6 +53,7 @@ const FLAG_TEXT: Record<VerifierFlag, string> = {
   deadline_downgraded: "The verifier removed the deadline",
   pointer_invalid: "The model pointed at words that aren't in the transcript",
   audio_unclear: "The audio check couldn't confirm the words",
+  self_assignment_unverified: "The owner introduced themselves elsewhere, but speaker labels couldn't confirm it was them",
 };
 
 function Field({
@@ -75,7 +76,9 @@ function Field({
       ? `Audio unclear: the name or time${pointer ? ` (“${pointer.exact_words}”)` : ""} couldn't be confirmed.`
       : flags.includes("pointer_invalid")
         ? "The model's pointer didn't match the transcript, so nothing was copied."
-        : "Not stated in the recording.";
+        : flags.includes("self_assignment_unverified")
+          ? `A name${pointer ? ` (“${pointer.exact_words}”)` : ""} was said elsewhere, but we couldn't confirm the same person took this on.`
+          : "Not stated in the recording.";
     return (
       <div className="flex items-center gap-2">
         <dt className="w-16 text-xs text-ink-3">{label}</dt>
@@ -132,7 +135,7 @@ function ActionCard({ a, segments, onJump, selected }: { a: ActionItem; segments
             <Chips ids={a.evidence_segment_ids} segments={segments} onJump={onJump} itemId={a.id} />
             {flags.map((f) => (
               <Tip key={f} content={FLAG_TEXT[f] ?? f}>
-                <span className="rounded-[2px] bg-warn-soft px-1.5 py-px text-[10.5px] font-medium text-warn">{f.replace("_", " ")}</span>
+                <span className="rounded-[2px] bg-warn-soft px-1.5 py-px text-[10.5px] font-medium text-warn">{f.replaceAll("_", " ")}</span>
               </Tip>
             ))}
           </div>
@@ -274,7 +277,15 @@ export function RecordPane({ record, segments, tab, onTab, selectedId, onJump, e
                 {r.open_proposals.map((p, i) => (
                   <li key={i} className="rounded-[2px] border border-dashed border-line bg-surface p-3 text-sm">
                     <span className="mr-2 rounded-[2px] bg-raised px-1.5 py-px text-[10.5px] font-medium tracking-wide text-ink-2 uppercase">Proposal</span>
-                    {p.proposal} <Chips ids={p.evidence_segment_ids} segments={segments} onJump={onJump} />
+                    {p.proposal}{" "}
+                    {p.demoted_from_decision && (
+                      <Tip content="Written up as a decision, but the transcript has no clear agreement, so it stays a proposal.">
+                        <span className="mr-1 border border-dashed border-ink/30 px-1.5 py-px font-mono text-[10px] text-ink-3">
+                          no clear agreement
+                        </span>
+                      </Tip>
+                    )}
+                    <Chips ids={p.evidence_segment_ids} segments={segments} onJump={onJump} />
                   </li>
                 ))}
               </ul>

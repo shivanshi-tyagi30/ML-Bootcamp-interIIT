@@ -1,0 +1,129 @@
+"""DOCUMENTING: LM2 writes the record with pointers and citations (spec Section 10.11)."""
+
+from __future__ import annotations
+
+import json
+from typing import TYPE_CHECKING, Any
+
+from rapidfuzz import fuzz
+
+from app.core.errors import PipelineError
+from app.core.stages import Stage
+from app.core.text import estimate_tokens
+from app.llm.client import load_prompt
+from app.llm.json_repair import InvalidModelOutput
+from app.models.llm_io import LM2Output, SummaryPick
+from app.models.record import MinutesTopic
+from app.pipeline.lm1_vocabulary import chunk_lines, transcript_lines
+
+if TYPE_CHECKING:
+    from app.pipeline.runner import JobContext
+
+DEDUPE_RATIO = 90
+
+
+def user_message(lines: list[str]) -> str:
+    """Transcript plus the JSON schema (helps servers without constrained decoding)."""
+    schema = json.dumps(LM2Output.model_json_schema(), ensure_ascii=False)
+    return "TRANSCRIPT\n" + "\n".join(lines) + "\n\nJSON SCHEMA\n" + schema
+
+
+def overlapping_chunks(lines: list[str], max_tokens: int) -> list[list[str]]:
+    """Chunks on segment boundaries, each starting with ~10% of the previous chunk."""
+    base = chunk_lines(lines, int(max_tokens * 0.9))
+    out = [base[0]] if base else []
+    for prev, cur in zip(base, base[1:]):
+        overlap = prev[-max(1, len(prev) // 10) :]
+        out.append(overlap + cur)
+    return out
+
+
+def _dedupe(items: list[Any], text_of, ids_of) -> list[Any]:
+    """Drop near-duplicate items (similar text and shared evidence), merging their evidence ids."""
+    kept: list[Any] = []
+    for it in items:
+        twin = next(
+            (k for k in kept
+             if fuzz.token_set_ratio(text_of(k), text_of(it)) >= DEDUPE_RATIO and set(ids_of(k)) & set(ids_of(it))),
+            None,
+        )
+        if twin is None:
+            kept.append(it)
+        else:
+            ids_of(twin).extend(i for i in ids_of(it) if i not in ids_of(twin))
+    return kept
+
+
+def merge_outputs(parts: list[LM2Output]) -> LM2Output:
+    """Merge per-chunk outputs; the summary is chosen afterwards."""
+    topics: dict[str, MinutesTopic] = {}
+    for p in parts:
+        for t in p.minutes:
+            key = t.topic.strip().lower()
+            if key in topics:
+                have = {x.text for x in topics[key].points}
+                topics[key].points.extend(x for x in t.points if x.text not in have)
+            else:
+                topics[key] = t.model_copy(deep=True)
+    return LM2Output(
+        summary=[s for p in parts for s in p.summary],
+        minutes=list(topics.values()),
+        decisions=_dedupe([d for p in parts for d in p.decisions], lambda x: x.decision, lambda x: x.evidence_segment_ids),
+        open_proposals=_dedupe([d for p in parts for d in p.open_proposals], lambda x: x.proposal,
+                               lambda x: x.evidence_segment_ids),
+        action_items=_dedupe([d for p in parts for d in p.action_items], lambda x: x.task, lambda x: x.evidence_segment_ids),
+    )
+
+
+async def document(ctx: "JobContext") -> None:
+    """Stage function: write 09_lm2_raw.json (without the scratchpad)."""
+    s = ctx.settings
+    refined = ctx.read("refined_transcript.json")
+    lines = transcript_lines(refined, with_speaker=True)
+    system = load_prompt("lm2_document")
+    call = lambda user, schema=LM2Output: ctx.llm.json_call(  # noqa: E731
+        s.LM2_MODEL, system, user, schema, s.LLM_MAX_RETRIES, max_tokens=8192, job_id=ctx.job_id,
+    )
+    try:
+        budget = s.LM2_MAX_INPUT_TOKENS - estimate_tokens(system) - 2000
+        if estimate_tokens("\n".join(lines)) <= budget:
+            await ctx.progress(0.1, "Writing the meeting record")
+            out = await call(user_message(lines))
+            mode = "single"
+        else:
+            chunks = overlapping_chunks(lines, budget)
+            parts = []
+            for i, chunk in enumerate(chunks):
+                await ctx.progress(i / (len(chunks) + 1), f"Writing the meeting record (part {i + 1} of {len(chunks)})")
+                parts.append(await call(user_message(chunk)))
+            out = merge_outputs(parts)
+            out.summary = await pick_summary(ctx, call, out)
+            mode = f"chunked:{len(chunks)}"
+    except InvalidModelOutput as e:
+        raise PipelineError("E_LM2_FAILED", Stage.DOCUMENTING, str(e)) from e
+    except PipelineError:
+        raise
+    except Exception as e:  # noqa: BLE001 - connection errors etc.
+        raise PipelineError("E_LM2_FAILED", Stage.DOCUMENTING, repr(e)) from e
+    data = out.model_dump(mode="json", exclude={"scratchpad"})
+    data["mode"] = mode
+    ctx.write(ctx.output_name(Stage.DOCUMENTING), data)
+
+
+async def pick_summary(ctx: "JobContext", call, merged: LM2Output) -> list:
+    """Chunked mode: a small LM2 call that may only reuse existing cited sentences (max 5)."""
+    cands = merged.summary
+    if len(cands) <= 5:
+        return cands
+    listing = "\n".join(f"{i}. {c.text}" for i, c in enumerate(cands))
+    user = (
+        "These summary sentences were written for parts of one meeting. Choose at most 5 that together "
+        "summarise the whole meeting without repeating each other. Return their numbers as "
+        '{"keep": [..]} and nothing else.\n\n' + listing
+    )
+    try:
+        pick: SummaryPick = await call(user, SummaryPick)
+        chosen = [cands[i] for i in dict.fromkeys(pick.keep) if 0 <= i < len(cands)]
+        return chosen or cands[:5]
+    except Exception:  # noqa: BLE001 - fall back to the first five
+        return cands[:5]

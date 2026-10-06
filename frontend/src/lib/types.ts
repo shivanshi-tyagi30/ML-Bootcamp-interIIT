@@ -52,13 +52,15 @@ export interface Decision {
 export interface Proposal {
   proposal: string;
   evidence_segment_ids: string[];
+  demoted_from_decision?: boolean;
 }
 
 export type VerifierFlag =
   | "owner_downgraded"
   | "deadline_downgraded"
   | "pointer_invalid"
-  | "audio_unclear";
+  | "audio_unclear"
+  | "self_assignment_unverified";
 
 export interface ActionItem {
   id: string;
@@ -79,20 +81,25 @@ export interface Fidelity {
   edits_rejected?: number;
   disputed_words?: number;
   items_downgraded_by_verifier?: number;
+  sentences_removed_by_verifier?: number;
   transcript_coverage_pct?: number;
 }
 
 export interface MeetingRecord {
   meta: {
     job_id?: string;
+    title?: string;
     source_file?: string;
     duration_s?: number;
-    models?: { stt?: string; stt_check?: string; lm1?: string; lm2?: string };
+    language?: string;
+    language_probability?: number;
+    models?: { stt?: string; stt_check?: string; diarization?: string; lm1?: string; lm2?: string };
+    warnings?: string[];
     generated_at?: string;
   };
   raw_transcript: Segment[];
   refined_transcript: Segment[];
-  refinement: { accepted: Edit[]; rejected: RejectedEdit[] };
+  refinement: { vocabulary?: { domain?: string; terms?: { term: string }[] }; accepted: Edit[]; rejected: RejectedEdit[] };
   summary: CitedSentence[];
   minutes: { topic: string; points: CitedSentence[] }[];
   decisions: Decision[];
@@ -106,11 +113,15 @@ export type PartialRecord = Partial<MeetingRecord> & Pick<MeetingRecord, "meta">
 
 export type Stage =
   | "uploaded"
+  | "queued"
   | "validating"
   | "normalizing"
   | "speech_check"
   | "transcribing"
   | "rechecking"
+  | "diarizing"
+  | "raw_saved"
+  | "vocabulary"
   | "refining"
   | "guarding"
   | "documenting"
@@ -121,11 +132,15 @@ export type Stage =
 
 export const PIPELINE_ORDER: Stage[] = [
   "uploaded",
+  "queued",
   "validating",
   "normalizing",
   "speech_check",
   "transcribing",
   "rechecking",
+  "diarizing",
+  "raw_saved",
+  "vocabulary",
   "refining",
   "guarding",
   "documenting",
@@ -138,11 +153,16 @@ export type ErrorCode =
   | "E_UNSUPPORTED_FORMAT"
   | "E_EMPTY_FILE"
   | "E_TOO_LARGE"
+  | "E_TOO_LONG"
   | "E_UNREADABLE"
   | "E_NO_SPEECH"
   | "E_STT_FAILED"
   | "E_LM1_FAILED"
   | "E_LM2_FAILED"
+  | "E_RENDER_FAILED"
+  | "E_BUSY"
+  | "E_NOT_FOUND"
+  | "E_JOB_RUNNING"
   | "E_INTERNAL"
   | "E_NETWORK";
 
@@ -152,14 +172,36 @@ export interface JobError {
   user_message: string;
 }
 
-/** One Server-Sent Event from GET /jobs/{id}/events. */
+/** One `progress` Server-Sent Event from GET /api/jobs/{id}/events. */
 export interface JobEvent {
   stage: Stage;
+  status: "queued" | "running" | "completed" | "failed";
+  progress?: number; // 0..1 overall
+  message?: string; // e.g. "Refining terminology (window 3 of 6)"
+  raw_ready?: boolean;
+  refined_ready?: boolean;
+  record_ready?: boolean;
   error?: JobError;
   warnings?: string[]; // e.g. "W_NON_ENGLISH"
 }
 
-/** GET /jobs/{id} */
+/** A row of GET /api/jobs. */
+export interface JobSummary {
+  id: string;
+  title: string;
+  source_file: string;
+  status: "queued" | "running" | "completed" | "failed";
+  stage: string;
+  error_code?: string | null;
+  error_message?: string | null;
+  duration_s?: number | null;
+  n_decisions: number;
+  n_tasks: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** GET /api/jobs/{id}, normalised for the UI. */
 export interface JobState {
   job_id: string;
   stage: Stage;

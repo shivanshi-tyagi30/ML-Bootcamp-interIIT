@@ -2,20 +2,18 @@ import { useEffect, useRef, useState } from "react";
 import { ApiError, type Api } from "../lib/api";
 import { makeError } from "../lib/errors";
 import { fmtTime } from "../lib/format";
-import { PIPELINE_ORDER, type JobError, type PartialRecord, type Segment, type Stage } from "../lib/types";
+import { type JobError, type PartialRecord, type Segment, type Stage } from "../lib/types";
 import { Brand, Icon, cx } from "./ui";
 
 // Plan 11.2: the user-facing steps, each covering one or more backend stages.
 const STEPS: { label: string; stages: Stage[]; doing: string }[] = [
-  { label: "Checking file", stages: ["uploaded", "validating", "normalizing", "speech_check"], doing: "Making sure the file is audio and that someone is speaking." },
+  { label: "Checking file", stages: ["uploaded", "queued", "validating", "normalizing", "speech_check"], doing: "Making sure the file is audio and that someone is speaking." },
   { label: "Transcribing", stages: ["transcribing"], doing: "Writing down every word, with timestamps." },
-  { label: "Double-checking", stages: ["rechecking"], doing: "Listening again to names, numbers and anything unclear." },
-  { label: "Refining", stages: ["refining", "guarding"], doing: "Fixing misheard jargon. Numbers, names and “not” stay untouched." },
+  { label: "Double-checking", stages: ["rechecking", "diarizing", "raw_saved"], doing: "Listening again to names, numbers and anything unclear." },
+  { label: "Refining", stages: ["vocabulary", "refining", "guarding"], doing: "Fixing misheard jargon. Numbers, names and “not” stay untouched." },
   { label: "Writing record", stages: ["documenting"], doing: "Drafting the summary, minutes, decisions and action items." },
   { label: "Verifying", stages: ["verifying", "rendering"], doing: "Checking every claim against the transcript before you see it." },
 ];
-
-const idx = (s: Stage) => PIPELINE_ORDER.indexOf(s);
 
 interface Props {
   api: Api;
@@ -30,6 +28,8 @@ export function ProcessingScreen({ api, jobId, fileName, onDone, onFail }: Props
   const [stage, setStage] = useState<Stage>("uploaded");
   const [failedStage, setFailedStage] = useState<Stage | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
+  const [progress, setProgress] = useState(0);
+  const [message, setMessage] = useState<string | null>(null);
   const [preview, setPreview] = useState<Segment[] | null>(null);
   const cb = useRef({ onDone, onFail });
   cb.current = { onDone, onFail };
@@ -56,20 +56,22 @@ export function ProcessingScreen({ api, jobId, fileName, onDone, onFail }: Props
     unsubscribe = api.watch(jobId, (e) => {
       if (finished) return;
       if (e.warnings?.length) setWarnings(e.warnings);
-      if (e.stage === "failed") {
+      if (e.progress != null) setProgress(e.progress);
+      if (e.message) setMessage(e.message);
+      if (e.status === "failed") {
         setFailedStage(e.error?.stage ?? null);
         stop();
         finish(e.error ?? makeError("E_INTERNAL"));
         return;
       }
       setStage(e.stage);
-      if (e.stage === "completed") {
+      if (e.status === "completed") {
         stop();
         finish();
         return;
       }
       // Show the raw transcript as soon as it exists (plan 11.2).
-      if (!fetchedPreview && idx(e.stage) > idx("rechecking")) {
+      if (!fetchedPreview && e.raw_ready) {
         fetchedPreview = true;
         api.getJob(jobId).then((s) => s.record.raw_transcript && setPreview(s.record.raw_transcript), () => {});
       }
@@ -96,10 +98,21 @@ export function ProcessingScreen({ api, jobId, fileName, onDone, onFail }: Props
         <span className="block truncate font-serif font-normal tracking-[-0.01em] italic">{fileName}</span>
       </h1>
       <p className="mt-4 min-h-[1.5em] text-[16px] text-ink-2">
-        {failedStage ? "We kept everything that finished before the problem." : STEPS[Math.max(0, activeStep)]?.doing}
+        {failedStage
+          ? "We kept everything that finished before the problem."
+          : stage === "queued"
+            ? "Another recording is using the GPU. Yours starts as soon as it finishes."
+            : STEPS[Math.max(0, activeStep)]?.doing}
       </p>
+      <div className="mt-6 flex items-center gap-3 font-mono text-[11px] tracking-[0.08em] text-ink-3" aria-live="polite">
+        <span className="tabular-nums text-ink">{Math.round(progress * 100)}%</span>
+        <span className="h-px flex-1 bg-line">
+          <span className="block h-px bg-ink transition-[width] duration-500" style={{ width: `${progress * 100}%` }} />
+        </span>
+        <span className="truncate">{(message ?? "Starting").toUpperCase()}</span>
+      </div>
 
-      <ol className="mt-10 grid grid-cols-2 gap-px border border-ink bg-ink sm:grid-cols-6" aria-label="Progress">
+      <ol className="mt-6 grid grid-cols-2 gap-px border border-ink bg-ink sm:grid-cols-6" aria-label="Progress">
         {STEPS.map((s, i) => {
           const state = i < activeStep ? "done" : i === activeStep ? (failedStage ? "failed" : "active") : "todo";
           return (
