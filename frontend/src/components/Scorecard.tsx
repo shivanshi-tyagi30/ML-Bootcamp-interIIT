@@ -52,6 +52,11 @@ export function Scorecard({ f }: { f: Fidelity }) {
       <Stat key="v" label="Downgraded by verifier" value={String(f.items_downgraded_by_verifier)}
         tip="Owners, deadlines or decisions the verifier removed or downgraded because the transcript didn't support them." />,
     );
+  if (f.sentences_removed_by_verifier != null)
+    items.push(
+      <Stat key="s" label="Sentences removed" value={String(f.sentences_removed_by_verifier)}
+        tip="Summary or minutes sentences the verifier deleted because they mentioned a number or name not in their cited lines." />,
+    );
   if (f.transcript_coverage_pct != null)
     items.push(
       <Stat key="c" label="Coverage" value={`${Math.round(f.transcript_coverage_pct)}%`}

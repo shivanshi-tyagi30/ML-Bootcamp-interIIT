@@ -78,13 +78,15 @@ const applyEdits = (seg: Segment): Segment => {
 export const SAMPLE_RECORD: MeetingRecord = {
   meta: {
     job_id: "sample",
+    title: "Weekly sync (sample)",
     source_file: "weekly_sync.mp3",
     duration_s: 110,
     models: {
       stt: "faster-whisper large-v3",
       stt_check: "nvidia/parakeet-tdt-0.6b-v2",
-      lm1: "Qwen3-8B-Instruct",
-      lm2: "gemma-3-27b-it",
+      diarization: "pyannote/speaker-diarization-3.1",
+      lm1: "qwen3:14b",
+      lm2: "gemma3:27b",
     },
     generated_at: "2026-10-06T10:30:00Z",
   },
@@ -195,6 +197,7 @@ export const SAMPLE_RECORD: MeetingRecord = {
     edits_rejected: 2,
     disputed_words: 3,
     items_downgraded_by_verifier: 1,
+    sentences_removed_by_verifier: 0,
     transcript_coverage_pct: 81,
   },
 };

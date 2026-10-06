@@ -4,20 +4,26 @@ import type { ErrorCode, JobError } from "./types";
 // and the messages for checks we also run in the browser before uploading.
 export const ERROR_MESSAGES: Record<ErrorCode, string> = {
   E_UNSUPPORTED_FORMAT:
-    "This file type isn't supported. Upload MP3, WAV, M4A, OGG, FLAC or WEBM.",
-  E_EMPTY_FILE: "The file is empty.",
-  E_TOO_LARGE: "The file is too large to process.",
-  E_UNREADABLE: "The file is corrupt or has no audio track.",
+    "This file type isn't supported. Please upload an audio file (MP3, WAV, M4A, OGG, FLAC, WEBM, AAC).",
+  E_EMPTY_FILE: "The file is empty. Please choose a recording that contains audio.",
+  E_TOO_LARGE: "The file is too large.",
+  E_TOO_LONG: "The recording is too long.",
+  E_UNREADABLE: "The file could not be read. It may be corrupt or have no audio track.",
   E_NO_SPEECH: "No speech was detected in this recording.",
   E_STT_FAILED: "Transcription failed. Please try again.",
   E_LM1_FAILED: "Transcript refinement failed. The raw transcript is still available.",
   E_LM2_FAILED: "Writing the meeting record failed. Both transcripts are still available.",
-  E_INTERNAL: "Unexpected error; see logs.",
+  E_RENDER_FAILED: "The record was created but the downloads could not be generated.",
+  E_BUSY: "The server is busy with other uploads. Please try again in a moment.",
+  E_NOT_FOUND: "This meeting could not be found.",
+  E_JOB_RUNNING: "This meeting is still being processed. Try again when it has finished.",
+  E_INTERNAL: "Something unexpected went wrong. Please try again.",
   E_NETWORK: "Couldn't reach the server. Check that the backend is running.",
 };
 
-export const ACCEPTED_EXTENSIONS = ["mp3", "wav", "m4a", "ogg", "flac", "webm"];
-export const MAX_UPLOAD_MB = Number(import.meta.env.VITE_MAX_UPLOAD_MB ?? 500);
+// Keep in step with the backend's ALLOWED_EXT and MAX_FILE_MB.
+export const ACCEPTED_EXTENSIONS = ["mp3", "wav", "m4a", "ogg", "flac", "webm", "mp4", "aac"];
+export const MAX_UPLOAD_MB = Number(import.meta.env.VITE_MAX_UPLOAD_MB ?? 200);
 
 export function makeError(code: ErrorCode, message?: string): JobError {
   return { code, user_message: message ?? ERROR_MESSAGES[code] };
@@ -29,6 +35,6 @@ export function precheckFile(file: File): JobError | null {
   if (!ACCEPTED_EXTENSIONS.includes(ext)) return makeError("E_UNSUPPORTED_FORMAT");
   if (file.size === 0) return makeError("E_EMPTY_FILE");
   if (file.size > MAX_UPLOAD_MB * 1024 * 1024)
-    return makeError("E_TOO_LARGE", `The file is too large to process (limit ${MAX_UPLOAD_MB} MB).`);
+    return makeError("E_TOO_LARGE", `The file is too large. The maximum size is ${MAX_UPLOAD_MB} MB.`);
   return null;
 }

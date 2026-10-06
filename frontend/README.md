@@ -15,14 +15,14 @@ Mock mode is also available on any build by adding `?mock` to the URL. In
 mock mode, a file name containing `nospeech` or `fail-lm2` simulates those
 failures.
 
-The backend contract is in [`../docs/api-contract.md`](../docs/api-contract.md).
+The backend is in [`../backend`](../backend); what the UI relies on is in [`../docs/api-contract.md`](../docs/api-contract.md).
 
 ## What's here
 
 | Screen     | Features |
 |------------|----------|
-| Upload     | Drag and drop; type, empty and size checks in the browser (`E_UNSUPPORTED_FORMAT`, `E_EMPTY_FILE`, `E_TOO_LARGE`); optional glossary; red error card with "Try another file" |
-| Processing | Live step bar driven by SSE (polling fallback); raw transcript preview as soon as it's ready; non-English warning |
+| Upload     | Drag and drop; type, empty and size checks in the browser (`E_UNSUPPORTED_FORMAT`, `E_EMPTY_FILE`, `E_TOO_LARGE`); optional meeting name and expected terms; error card with "Try another file"; recent meetings with open, rename and delete; re-uploading a processed file opens the saved result |
+| Processing | Step bar, overall percentage and the server's current message, driven by SSE (polling fallback); raw transcript preview as soon as `raw_ready`; queued and non-English notices |
 | Workspace  | Fidelity scorecard and colour legend; Raw / Refined / Diff transcript (virtualized), with hover details for edits, blocked edits and disputed words; coverage dimming; record tabs (Summary, Minutes, Decisions, Action items, Not agreed); evidence chips that scroll the transcript and play from 2 s earlier; honest "Unspecified" chips with the reason; timeline with decision/task pins; speed control; light/dark mode; Space and J/K shortcuts; download menu; partial results when LM2 fails |
 
 ## Layout
