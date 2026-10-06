@@ -101,6 +101,8 @@ export default function App() {
       error={uploadError}
       busy={busy}
       mock={api.mock}
+      theme={theme}
+      onTheme={toggleTheme}
       onStart={start}
       onSample={openSample}
       onClearError={() => setUploadError(null)}

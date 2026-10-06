@@ -15,10 +15,10 @@ export function Button({ variant = "secondary", size = "md", className, ...rest 
     <button
       {...rest}
       className={cx(
-        "inline-flex items-center justify-center gap-1.5 rounded-md font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+        "inline-flex items-center justify-center gap-1.5 font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50",
         size === "sm" ? "h-7 px-2.5 text-xs" : "h-9 px-3.5 text-sm",
-        variant === "primary" && "bg-accent text-accent-ink hover:opacity-90",
-        variant === "secondary" && "border border-line bg-surface text-ink hover:bg-raised",
+        variant === "primary" && "bg-accent font-bold text-accent-ink hover:bg-ink hover:text-accent",
+        variant === "secondary" && "border border-ink/20 bg-surface text-ink hover:border-ink",
         variant === "ghost" && "text-ink-2 hover:bg-raised hover:text-ink",
         className,
       )}
@@ -38,7 +38,7 @@ export function Tabs<T extends string>({
   label: string;
 }) {
   return (
-    <div role="tablist" aria-label={label} className="flex flex-wrap gap-0.5 rounded-lg bg-raised p-0.5">
+    <div role="tablist" aria-label={label} className="flex flex-wrap border border-ink/15">
       {items.map((it) => (
         <button
           key={it.value}
@@ -46,8 +46,8 @@ export function Tabs<T extends string>({
           aria-selected={value === it.value}
           onClick={() => onChange(it.value)}
           className={cx(
-            "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-            value === it.value ? "bg-surface text-ink shadow-sm" : "text-ink-2 hover:text-ink",
+            "px-2.5 py-1 font-mono text-[10.5px] tracking-[0.06em] uppercase transition-colors",
+            value === it.value ? "bg-ink text-surface" : "text-ink-2 hover:bg-raised hover:text-ink",
           )}
         >
           {it.label}
@@ -101,7 +101,7 @@ export function Tip({
             ref={tipRef}
             role="tooltip"
             style={{ left: pos.x, top: pos.y, transform: pos.below ? undefined : "translateY(-100%)" }}
-            className="pointer-events-none fixed z-50 max-w-xs rounded-md border border-line bg-surface px-2.5 py-1.5 text-xs leading-relaxed text-ink shadow-lg"
+            className="pointer-events-none fixed z-50 max-w-xs border border-ink/20 bg-surface px-2.5 py-1.5 text-xs leading-relaxed text-ink shadow-lg"
           >
             {content}
           </div>,
@@ -112,7 +112,23 @@ export function Tip({
 }
 
 export function Empty({ children }: { children: ReactNode }) {
-  return <p className="rounded-lg border border-dashed border-line px-4 py-8 text-center text-sm text-ink-3">{children}</p>;
+  return <p className="border border-dashed border-ink/20 px-4 py-8 text-center text-sm text-ink-3">{children}</p>;
+}
+
+/** Wordmark: orange block with a cursor-style T, then the name. */
+export function Brand({ compact }: { compact?: boolean }) {
+  return (
+    <div className="flex items-center gap-2.5">
+      <span className="relative grid size-8 place-items-center bg-accent text-[17px] font-bold text-accent-ink">
+        T
+        <span className="absolute -top-1 -left-px h-[calc(100%+6px)] w-[2px] bg-accent-deep" />
+      </span>
+      <span className="text-[19px] leading-none font-bold tracking-[-0.03em]">
+        Trace
+        {!compact && <span className="ml-2 font-mono max-sm:hidden text-[10px] font-normal tracking-[0.16em] text-ink-3">ML · PS</span>}
+      </span>
+    </div>
+  );
 }
 
 // Small inline icons (no icon dependency).

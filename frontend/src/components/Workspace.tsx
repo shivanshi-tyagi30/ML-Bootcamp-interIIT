@@ -9,7 +9,7 @@ import { PlayerBar, type Pin } from "./PlayerBar";
 import { RecordPane, type RecordTab } from "./RecordPane";
 import { Legend, Scorecard } from "./Scorecard";
 import { TranscriptPane } from "./TranscriptPane";
-import { Button, Icon, Tip } from "./ui";
+import { Brand, Button, Icon, Tip } from "./ui";
 
 interface Props {
   api: Api;
@@ -112,14 +112,11 @@ export function Workspace({ api, jobId, record, audioUrl, error, theme, onTheme,
     <div className="flex h-full flex-col">
       <audio ref={audio.ref} src={audioUrl ?? undefined} preload="metadata" />
 
-      <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-line bg-surface px-4 py-2.5">
-        <div className="flex items-center gap-2 text-sm font-semibold tracking-wide text-accent">
-          <span className="grid size-6 place-items-center rounded-md bg-accent text-[11px] font-bold text-accent-ink">T</span>
-          TRACE
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-medium">{record.meta.source_file ?? "Recording"}</div>
-          <div className="truncate text-xs text-ink-3">
+      <header className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-ink bg-surface px-4 py-2.5">
+        <Brand compact />
+        <div className="min-w-0 flex-1 border-l border-line pl-5">
+          <div className="truncate text-[15px] font-bold tracking-[-0.01em]">{record.meta.source_file ?? "Recording"}</div>
+          <div className="truncate font-mono text-[10.5px] text-ink-3">
             {fmtTime(record.meta.duration_s ?? audio.duration)}
             {(m.stt || m.lm1 || m.lm2) && (
               <Tip
@@ -154,12 +151,12 @@ export function Workspace({ api, jobId, record, audioUrl, error, theme, onTheme,
         </div>
       )}
 
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-surface/60 px-3 py-1.5">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-bg px-3 py-1.5">
         <Scorecard f={record.fidelity ?? {}} />
         <Legend />
       </div>
 
-      <main className="grid min-h-0 flex-1 grid-cols-1 divide-line max-md:overflow-y-auto md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] md:divide-x">
+      <main className="grid min-h-0 flex-1 grid-cols-1 divide-ink/15 bg-surface max-md:overflow-y-auto md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] md:divide-x">
         <TranscriptPane
           raw={raw}
           accepted={record.refinement?.accepted ?? []}

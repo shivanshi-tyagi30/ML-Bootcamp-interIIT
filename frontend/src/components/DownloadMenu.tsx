@@ -54,7 +54,7 @@ export function DownloadMenu({ api, jobId, record }: { api: Api; jobId: string; 
         <Icon.download /> Download <Icon.chevron className="size-3.5 text-ink-3" />
       </Button>
       {open && (
-        <div role="menu" className="absolute right-0 z-40 mt-1 w-56 rounded-lg border border-line bg-surface p-1 shadow-lg">
+        <div role="menu" className="absolute right-0 z-40 mt-1 w-56 rounded-[2px] border border-line bg-surface p-1 shadow-lg">
           {OPTIONS.map((o) => {
             const disabled =
               (o.needsRecord && !hasRecord(record)) ||
@@ -67,7 +67,7 @@ export function DownloadMenu({ api, jobId, record }: { api: Api; jobId: string; 
                 disabled={disabled}
                 onClick={() => download(o.fmt, o.ext)}
                 title={api.mock && o.fmt === "docx" ? "Word export needs the backend" : undefined}
-                className="flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-sm hover:bg-raised disabled:cursor-not-allowed disabled:opacity-40"
+                className="flex w-full items-center justify-between rounded-[2px] px-2.5 py-1.5 text-left text-sm hover:bg-raised disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {o.label}
                 <span className="font-mono text-[11px] text-ink-3">.{o.ext}</span>

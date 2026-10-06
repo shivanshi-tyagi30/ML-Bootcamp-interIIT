@@ -3,7 +3,7 @@ import { Tip, cx } from "./ui";
 
 function Stat({ label, value, tip, tone }: { label: string; value: string; tip: string; tone?: "ok" | "bad" | "warn" }) {
   return (
-    <Tip content={tip} className="flex items-baseline gap-1.5 rounded-md px-2 py-1 hover:bg-raised">
+    <Tip content={tip} className="flex items-baseline gap-1.5 rounded-[2px] px-2 py-1 hover:bg-raised">
       <span className="text-xs text-ink-3">{label}</span>
       <span
         className={cx(

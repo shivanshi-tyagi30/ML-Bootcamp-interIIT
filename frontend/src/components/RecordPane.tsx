@@ -29,7 +29,7 @@ function Chips({ ids, segments, onJump, itemId }: { ids: string[]; segments: Map
           >
             <button
               onClick={() => onJump([id], itemId)}
-              className="rounded border border-accent/25 bg-accent-soft px-1.5 py-px font-mono text-[10.5px] font-medium text-accent hover:border-accent"
+              className="rounded-[2px] border border-accent/25 bg-accent-soft px-1.5 py-px font-mono text-[10.5px] font-medium text-accent-deep hover:border-accent"
             >
               {id}
             </button>
@@ -132,7 +132,7 @@ function ActionCard({ a, segments, onJump, selected }: { a: ActionItem; segments
             <Chips ids={a.evidence_segment_ids} segments={segments} onJump={onJump} itemId={a.id} />
             {flags.map((f) => (
               <Tip key={f} content={FLAG_TEXT[f] ?? f}>
-                <span className="rounded bg-warn-soft px-1.5 py-px text-[10.5px] font-medium text-warn">{f.replace("_", " ")}</span>
+                <span className="rounded-[2px] bg-warn-soft px-1.5 py-px text-[10.5px] font-medium text-warn">{f.replace("_", " ")}</span>
               </Tip>
             ))}
           </div>
@@ -152,7 +152,7 @@ function Card({ id, selected, onPlay, children }: { id: string; selected: boolea
       ref={ref}
       data-item={id}
       className={cx(
-        "group relative rounded-lg border bg-surface p-3.5 transition-colors",
+        "group relative rounded-[2px] border bg-surface p-3.5 transition-colors",
         selected ? "border-accent ring-1 ring-accent" : "border-line hover:border-ink-3/40",
       )}
     >
@@ -161,7 +161,7 @@ function Card({ id, selected, onPlay, children }: { id: string; selected: boolea
         onClick={onPlay}
         aria-label={`Play ${id} in the recording`}
         title="Play this moment"
-        className="absolute top-2.5 right-2.5 grid size-7 place-items-center rounded-full text-ink-3 hover:bg-accent-soft hover:text-accent"
+        className="absolute top-2.5 right-2.5 grid size-7 place-items-center rounded-full text-ink-3 hover:bg-accent-soft hover:text-accent-deep"
       >
         <Icon.play className="size-3.5" />
       </button>
@@ -194,7 +194,7 @@ export function RecordPane({ record, segments, tab, onTab, selectedId, onJump, e
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         {!ready ? (
-          <div role="alert" className="rounded-lg border border-bad/30 bg-bad-soft p-4 text-sm">
+          <div role="alert" className="rounded-[2px] border border-bad/30 bg-bad-soft p-4 text-sm">
             <div className="font-medium text-bad">{error?.user_message ?? "The meeting record isn't available."}</div>
             <p className="mt-1 text-ink-2">The raw and refined transcripts are still available on the left and in Downloads.</p>
             {error?.code && <div className="mt-1 font-mono text-[11px] text-ink-3">{error.code}</div>}
@@ -272,8 +272,8 @@ export function RecordPane({ record, segments, tab, onTab, selectedId, onJump, e
             {r.open_proposals?.length ? (
               <ul className="space-y-2">
                 {r.open_proposals.map((p, i) => (
-                  <li key={i} className="rounded-lg border border-dashed border-line bg-surface p-3 text-sm">
-                    <span className="mr-2 rounded bg-raised px-1.5 py-px text-[10.5px] font-medium tracking-wide text-ink-2 uppercase">Proposal</span>
+                  <li key={i} className="rounded-[2px] border border-dashed border-line bg-surface p-3 text-sm">
+                    <span className="mr-2 rounded-[2px] bg-raised px-1.5 py-px text-[10.5px] font-medium tracking-wide text-ink-2 uppercase">Proposal</span>
                     {p.proposal} <Chips ids={p.evidence_segment_ids} segments={segments} onJump={onJump} />
                   </li>
                 ))}
