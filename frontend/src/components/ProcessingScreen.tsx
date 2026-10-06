@@ -3,16 +3,16 @@ import { ApiError, type Api } from "../lib/api";
 import { makeError } from "../lib/errors";
 import { fmtTime } from "../lib/format";
 import { PIPELINE_ORDER, type JobError, type PartialRecord, type Segment, type Stage } from "../lib/types";
-import { Icon, cx } from "./ui";
+import { Brand, Icon, cx } from "./ui";
 
 // Plan 11.2: the user-facing steps, each covering one or more backend stages.
-const STEPS: { label: string; stages: Stage[] }[] = [
-  { label: "Checking file", stages: ["uploaded", "validating", "normalizing", "speech_check"] },
-  { label: "Transcribing", stages: ["transcribing"] },
-  { label: "Double-checking", stages: ["rechecking"] },
-  { label: "Refining", stages: ["refining", "guarding"] },
-  { label: "Writing record", stages: ["documenting"] },
-  { label: "Verifying", stages: ["verifying", "rendering"] },
+const STEPS: { label: string; stages: Stage[]; doing: string }[] = [
+  { label: "Checking file", stages: ["uploaded", "validating", "normalizing", "speech_check"], doing: "Making sure the file is audio and that someone is speaking." },
+  { label: "Transcribing", stages: ["transcribing"], doing: "Writing down every word, with timestamps." },
+  { label: "Double-checking", stages: ["rechecking"], doing: "Listening again to names, numbers and anything unclear." },
+  { label: "Refining", stages: ["refining", "guarding"], doing: "Fixing misheard jargon. Numbers, names and “not” stay untouched." },
+  { label: "Writing record", stages: ["documenting"], doing: "Drafting the summary, minutes, decisions and action items." },
+  { label: "Verifying", stages: ["verifying", "rendering"], doing: "Checking every claim against the transcript before you see it." },
 ];
 
 const idx = (s: Stage) => PIPELINE_ORDER.indexOf(s);
@@ -82,49 +82,60 @@ export function ProcessingScreen({ api, jobId, fileName, onDone, onFail }: Props
   const activeStep = STEPS.findIndex((s) => s.stages.includes(current));
 
   return (
-    <div className="mx-auto flex min-h-full max-w-3xl flex-col px-4 py-12">
-      <div className="mb-1 text-sm text-ink-3">Processing</div>
-      <h1 className="mb-8 truncate text-xl font-semibold">{fileName}</h1>
+    <div className="flex min-h-full flex-col bg-bg">
+      <header className="flex items-center justify-between border-b border-ink bg-surface px-5 py-3 sm:px-10">
+        <Brand compact />
+        <span className="font-mono text-[10.5px] tracking-[0.14em] text-ink-3">JOB {jobId.toUpperCase()}</span>
+      </header>
+    <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col px-5 py-12 sm:px-10">
+      <div className="mb-3 flex items-center gap-2.5 font-mono text-[11px] tracking-[0.18em] text-ink-2">
+        <span className="checker" /> {failedStage ? "STOPPED" : "IN PROGRESS"}
+      </div>
+      <h1 className="text-[clamp(34px,4.4vw,56px)] leading-[1.02] font-bold tracking-[-0.04em]">
+        {failedStage ? "Something went wrong with" : "Listening to"}
+        <span className="block truncate font-serif font-normal tracking-[-0.01em] italic">{fileName}</span>
+      </h1>
+      <p className="mt-4 min-h-[1.5em] text-[16px] text-ink-2">
+        {failedStage ? "We kept everything that finished before the problem." : STEPS[Math.max(0, activeStep)]?.doing}
+      </p>
 
-      <ol className="grid grid-cols-6 gap-2" aria-label="Progress">
+      <ol className="mt-10 grid grid-cols-2 gap-px border border-ink bg-ink sm:grid-cols-6" aria-label="Progress">
         {STEPS.map((s, i) => {
           const state = i < activeStep ? "done" : i === activeStep ? (failedStage ? "failed" : "active") : "todo";
           return (
-            <li key={s.label} className="flex flex-col gap-2" aria-current={state === "active" ? "step" : undefined}>
-              <div
-                className={cx(
-                  "h-1.5 rounded-full",
-                  state === "done" && "bg-accent",
-                  state === "active" && "animate-pulse bg-accent/60",
-                  state === "failed" && "bg-bad",
-                  state === "todo" && "bg-line",
-                )}
-              />
-              <div
-                className={cx(
-                  "flex items-center gap-1 text-xs",
-                  state === "todo" ? "text-ink-3" : state === "failed" ? "font-medium text-bad" : "font-medium text-ink",
-                )}
-              >
-                {state === "done" && <Icon.check className="size-3.5 text-accent" />}
+            <li
+              key={s.label}
+              aria-current={state === "active" ? "step" : undefined}
+              className={cx(
+                "relative flex flex-col gap-3 px-3 py-3",
+                state === "done" && "bg-accent text-accent-ink",
+                state === "active" && "bg-surface",
+                state === "failed" && "bg-bad-soft text-bad",
+                state === "todo" && "bg-surface text-ink-3",
+              )}
+            >
+              {state === "active" && <span className="absolute inset-x-0 top-0 h-[3px] animate-pulse bg-accent" />}
+              <span className="flex items-center justify-between font-mono text-[10.5px] tracking-[0.1em]">
+                {String(i + 1).padStart(2, "0")}
+                {state === "done" && <Icon.check className="size-3.5" />}
                 {state === "failed" && <Icon.x className="size-3.5" />}
-                {s.label}
-              </div>
+              </span>
+              <span className={cx("text-[13px] leading-tight", state !== "todo" && "font-bold")}>{s.label}</span>
             </li>
           );
         })}
       </ol>
 
       {warnings.includes("W_NON_ENGLISH") && (
-        <p className="mt-6 rounded-md bg-warn-soft px-3 py-2 text-xs text-warn">
+        <p className="mt-6 rounded-[2px] bg-warn-soft px-3 py-2 text-xs text-warn">
           This recording may not be in English. Processing continues, but accuracy may be lower.
         </p>
       )}
 
-      <section className="mt-10 flex min-h-0 flex-1 flex-col">
-        <h2 className="mb-2 text-sm font-medium text-ink-2">Raw transcript</h2>
+      <section className="mt-12 flex min-h-0 flex-1 flex-col">
+        <h2 className="mb-2 font-mono text-[11px] tracking-[0.14em] text-ink-3">RAW TRANSCRIPT · FIRST DRAFT</h2>
         {preview ? (
-          <div className="max-h-[50vh] overflow-y-auto rounded-lg border border-line bg-surface p-4 text-sm leading-relaxed">
+          <div className="max-h-[46vh] overflow-y-auto border border-ink/15 bg-surface p-5 text-[15px] leading-relaxed">
             {preview.map((s) => (
               <p key={s.id} className="mb-2">
                 <span className="mr-2 font-mono text-[11px] text-ink-3">{fmtTime(s.start)}</span>
@@ -134,11 +145,12 @@ export function ProcessingScreen({ api, jobId, fileName, onDone, onFail }: Props
             ))}
           </div>
         ) : (
-          <div className="rounded-lg border border-dashed border-line px-4 py-10 text-center text-sm text-ink-3">
-            The transcript will appear here once speech recognition finishes.
+          <div className="border border-dashed border-ink/20 px-4 py-10 text-center text-sm text-ink-3">
+            The first draft of the transcript shows up here as soon as it's written.
           </div>
         )}
       </section>
+    </div>
     </div>
   );
 }

@@ -107,7 +107,7 @@ const Row = memo(function Row({
     >
       <button
         onClick={() => onSeek(seg.start)}
-        className="h-fit pt-0.5 text-left font-mono text-[11px] text-ink-3 hover:text-accent"
+        className="h-fit pt-0.5 text-left font-mono text-[11px] text-ink-3 hover:text-accent-deep"
         title={`Play from ${fmtTime(seg.start)}`}
       >
         {fmtTime(seg.start)}

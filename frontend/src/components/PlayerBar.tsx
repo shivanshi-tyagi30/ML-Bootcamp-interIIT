@@ -106,7 +106,7 @@ export function PlayerBar({
         value={audio.rate}
         onChange={(e) => audio.setRate(Number(e.target.value))}
         aria-label="Playback speed"
-        className="h-7 rounded-md border border-line bg-surface px-1.5 text-xs"
+        className="h-7 rounded-[2px] border border-line bg-surface px-1.5 text-xs"
       >
         {RATES.map((r) => (
           <option key={r} value={r}>

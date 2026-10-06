@@ -1,77 +1,42 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { ACCEPTED_EXTENSIONS, MAX_UPLOAD_MB, precheckFile } from "../lib/errors";
 import type { JobError } from "../lib/types";
-import { BottomLeftBlob, TopRightBlob } from "./landing/Blobs";
 import { DatePill } from "./landing/DatePill";
 import { HeroIllustration } from "./landing/HeroIllustration";
-import { cx } from "./ui";
+import { PixelWord } from "./landing/PixelWord";
+import { Brand, Icon, cx } from "./ui";
 
 interface Props {
   error: JobError | null;
   busy: boolean;
   mock: boolean;
+  theme: "light" | "dark";
+  onTheme: () => void;
   onStart: (file: File, glossary: string) => void;
   onSample: () => void;
   onClearError: () => void;
 }
 
-// The layout is drawn on a fixed 1078 × 606 canvas and scaled to the window,
-// so wide screens keep the proportions of the design. Narrow screens stack.
-const STAGE_W = 1078;
-const STAGE_H = 606;
-const WIDE_MIN = 900;
-
-// Glass card outline: rounded rectangle with the top-right corner cut off.
-const CARD_PATH =
-  "M36,0 H198 Q212,0 222,10 L330,118 Q340,128 340,142 V334 A36,36 0 0 1 304,370 H36 A36,36 0 0 1 0,334 V36 A36,36 0 0 1 36,0 Z";
-
-function useStage() {
-  const get = () => {
-    const w = window.innerWidth;
-    const h = window.innerHeight;
-    const scale = Math.min(w / STAGE_W, h / STAGE_H);
-    return { wide: w >= WIDE_MIN, scale, x: (w - STAGE_W * scale) / 2, y: (h - STAGE_H * scale) / 2 };
-  };
-  const [s, setS] = useState(get);
-  useEffect(() => {
-    const on = () => setS(get());
-    window.addEventListener("resize", on);
-    return () => window.removeEventListener("resize", on);
-  }, []);
-  return s;
-}
-
-function CloudIcon() {
+/** "Owners → only when stated", after the PS's "Team size → 1-3 members". */
+function Promise_({ label, value }: { label: string; value: string }) {
   return (
-    <svg viewBox="0 0 64 48" className="h-[38px] w-[52px] drop-shadow-[0_2px_8px_rgba(80,150,255,0.6)]" aria-hidden>
-      <defs>
-        <linearGradient id="cloud-fill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#bfe0ff" />
-          <stop offset="1" stopColor="#5c9dff" />
-        </linearGradient>
-      </defs>
-      <path
-        d="M17 42h31a12 12 0 0 0 1.6-23.9A16 16 0 0 0 19 15.5 13.3 13.3 0 0 0 17 42z"
-        fill="url(#cloud-fill)"
-        stroke="#2f6fe8"
-        strokeWidth="2.2"
-        strokeLinejoin="round"
-      />
-      <path d="M32 44V25m0 0-6 6m6-6 6 6" fill="none" stroke="#1d56d8" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
+    <div className="flex flex-col items-end gap-1.5 text-right">
+      <div className="flex items-center gap-2.5 text-[22px] leading-none">
+        <span className="checker" />
+        <span className="font-serif italic">{label}</span>
+      </div>
+      <span className="hl font-serif text-[22px] leading-tight italic">{value}</span>
+    </div>
   );
 }
 
-export function UploadScreen({ error, busy, mock, onStart, onSample, onClearError }: Props) {
+export function UploadScreen({ error, busy, mock, theme, onTheme, onStart, onSample, onClearError }: Props) {
   const [file, setFile] = useState<File | null>(null);
   const [glossary, setGlossary] = useState("");
-  const [showGlossary, setShowGlossary] = useState(false);
   const [drag, setDrag] = useState(false);
   const [localError, setLocalError] = useState<JobError | null>(null);
   const input = useRef<HTMLInputElement>(null);
-  const stage = useStage();
   const shown = localError ?? error;
-  const wide = stage.wide;
 
   const choose = (f: File | undefined) => {
     if (!f) return;
@@ -88,160 +53,159 @@ export function UploadScreen({ error, busy, mock, onStart, onSample, onClearErro
     input.current?.click();
   };
 
-  const card = (
-    <div className={cx("relative h-[370px] w-[340px] shrink-0", wide && "absolute top-[26px] left-[62px]")}>
-      {/* glass body clipped to the card shape */}
-      <div
-        className="absolute inset-0"
-        style={{
-          clipPath: `path("${CARD_PATH}")`,
-          background: "linear-gradient(160deg, rgba(255,255,255,0.34), rgba(255,255,255,0.08) 55%, rgba(255,255,255,0.12))",
-          backdropFilter: "blur(20px) saturate(140%)",
-          WebkitBackdropFilter: "blur(20px) saturate(140%)",
-        }}
-      />
-      <svg className="pointer-events-none absolute inset-0" width="340" height="370" aria-hidden>
-        <defs>
-          <linearGradient id="card-rim" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stopColor="#fff" stopOpacity="0.85" />
-            <stop offset="0.5" stopColor="#fff" stopOpacity="0.25" />
-            <stop offset="1" stopColor="#fff" stopOpacity="0.5" />
-          </linearGradient>
-        </defs>
-        <path d={CARD_PATH} fill="none" stroke="url(#card-rim)" strokeWidth="1.5" />
-      </svg>
-
-      <div className="absolute top-[47px] left-[36px] font-mono text-[11px] font-medium tracking-[0.14em] text-white/90">
-        AI MEETING ASSISTANT
-      </div>
-      <h1 className="absolute top-[104px] left-[24px] text-[60px] leading-none font-extrabold tracking-[-0.045em] text-white [text-shadow:0_2px_20px_rgba(40,90,220,0.35)]">
-        Trace
-      </h1>
-
-      <label
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDrag(true);
-        }}
-        onDragLeave={() => setDrag(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          setDrag(false);
-          choose(e.dataTransfer.files[0]);
-        }}
-        className={cx(
-          "absolute top-[188px] left-[19px] flex h-[162px] w-[301px] cursor-pointer flex-col rounded-[18px] border-2 border-dashed px-[16px] pt-[22px] pb-[16px] transition-colors",
-          drag ? "border-white bg-white/15" : "border-white/80 hover:bg-white/[0.07]",
-        )}
-      >
-        <input
-          ref={input}
-          type="file"
-          className="sr-only"
-          accept={ACCEPTED_EXTENSIONS.map((e) => "." + e).join(",") + ",audio/*"}
-          onChange={(e) => choose(e.target.files?.[0])}
-        />
-        <div className="flex justify-center">
-          <CloudIcon />
-        </div>
-        <div className="mt-auto font-mono text-[15px] leading-[1.35] text-white uppercase">
-          {file ? (
-            <>
-              <span className="block truncate normal-case">{file.name}</span>
-              <span className="text-[11px] text-white/70">
-                {(file.size / 1024 / 1024).toFixed(1)} MB · CLICK TO CHANGE
-              </span>
-            </>
-          ) : (
-            "Drop an audio file/browse documents"
-          )}
-        </div>
-      </label>
-    </div>
-  );
-
-  const actions = (
-    <div className={cx("flex flex-col gap-3", wide ? "absolute top-[459px] left-[62px] w-[340px] items-center" : "mt-8 w-[340px] items-center")}>
-      <div className="flex items-center gap-4">
-        <button
-          disabled={!!localError || busy}
-          // With no file yet, the button opens the file picker instead.
-          onClick={() => (file ? onStart(file, glossary) : input.current?.click())}
-          title={!file ? `Choose an audio file (${ACCEPTED_EXTENSIONS.join(", ").toUpperCase()}, up to ${MAX_UPLOAD_MB} MB)` : undefined}
-          className="h-[36px] rounded-[3px] bg-[#0b6cf2] px-[14px] font-mono text-[16px] font-medium tracking-[0.02em] text-white shadow-[0_6px_24px_rgba(11,108,242,0.45)] transition hover:bg-[#2a80ff] disabled:cursor-not-allowed disabled:bg-[#0b6cf2]/70 disabled:text-white/75"
-        >
-          {busy ? "UPLOADING…" : "START PROCESSING"}
-        </button>
-      </div>
-
-      <div className="flex items-center gap-4 font-mono text-[11px] tracking-[0.06em] text-white/55">
-        <button className="hover:text-white" onClick={() => setShowGlossary((s) => !s)} aria-expanded={showGlossary}>
-          {showGlossary ? "− EXPECTED TERMS" : "+ EXPECTED TERMS"}
-        </button>
-        {mock && (
-          <button className="hover:text-white" onClick={onSample}>
-            OPEN SAMPLE MEETING
-          </button>
-        )}
-      </div>
-
-      {showGlossary && (
-        <input
-          autoFocus
-          aria-label="Expected terms, comma-separated"
-          value={glossary}
-          onChange={(e) => setGlossary(e.target.value)}
-          placeholder="Kubernetes, RAG, Priya, CUDA"
-          className="glass h-9 w-full rounded-md px-3 font-mono text-[12px] text-white placeholder:text-white/40 focus:outline-none"
-        />
-      )}
-
-      {shown && (
-        <div
-          role="alert"
-          className={cx(
-            "glass flex items-center gap-3 rounded-lg border-red-300/50! bg-red-500/15! px-3 py-2.5",
-            wide ? "absolute top-[-8px] left-[370px] w-[440px]" : "w-full",
-          )}
-        >
-          <div className="flex-1">
-            <div className="text-[13px] font-medium text-red-100">{shown.user_message}</div>
-            <div className="font-mono text-[10px] text-white/45">{shown.code}</div>
-          </div>
-          <button onClick={retry} className="shrink-0 rounded border border-white/40 px-2 py-1 font-mono text-[10.5px] text-white hover:bg-white/10">
-            TRY ANOTHER FILE
-          </button>
-        </div>
-      )}
-    </div>
-  );
-
   return (
-    <div className="landing-bg relative min-h-full overflow-hidden text-white">
-      <TopRightBlob className="pointer-events-none absolute -top-[70px] -right-[60px] w-[clamp(220px,28vw,420px)]" />
-      <BottomLeftBlob className="pointer-events-none absolute bottom-[3%] -left-[78px] w-[clamp(170px,25vw,340px)]" />
+    <div className="relative flex min-h-full flex-col overflow-hidden bg-bg">
+      <PixelWord className="pointer-events-none absolute top-[11%] -right-[10%] w-[74%] max-w-[1050px] opacity-75 max-lg:hidden" />
 
-      {wide ? (
-        <div
-          className="absolute top-0 left-0"
-          style={{ width: STAGE_W, height: STAGE_H, transform: `translate(${stage.x}px, ${stage.y}px) scale(${stage.scale})`, transformOrigin: "0 0" }}
-        >
-          {card}
-          {actions}
-          <div className="absolute top-[96px] left-[440px]">
+      <header className="relative z-10 flex items-center justify-between gap-4 px-5 py-5 sm:px-10">
+        <Brand />
+        <div className="flex items-center gap-2">
+          <DatePill className="max-sm:px-3 max-sm:text-[12px]" />
+          <button
+            onClick={onTheme}
+            aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+            className="grid size-9 place-items-center border border-line bg-surface text-ink-2 hover:text-ink"
+          >
+            {theme === "dark" ? <Icon.sun /> : <Icon.moon />}
+          </button>
+        </div>
+      </header>
+
+      <main className="relative z-10 mx-auto grid w-full max-w-[1320px] flex-1 items-center gap-x-16 gap-y-12 px-5 pt-4 pb-16 sm:px-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        <section>
+          <div className="mb-6 flex items-center gap-2.5 font-mono text-[11px] tracking-[0.18em] text-ink-2">
+            <span className="checker" /> AI MEETING ASSISTANT
+          </div>
+
+          <h1 className="leading-[0.92] tracking-[-0.045em] text-ink">
+            <span className="block text-[clamp(44px,5.2vw,80px)] font-bold whitespace-nowrap">Every meeting,</span>
+            <span className="-mt-1 block pl-[0.6em] font-serif text-[clamp(52px,6.3vw,98px)] font-normal tracking-[-0.02em] italic">
+              on record.
+            </span>
+          </h1>
+
+          <p className="mt-6 max-w-[520px] text-[16px] leading-relaxed text-ink-2">
+            Drop in a recording. Trace writes down what was said, fixes the jargon it misheard, and pulls out the
+            decisions and to-dos, each linked to the moment it was said. If nobody named an owner, we won't make one
+            up.
+          </p>
+
+          <div className="mt-8 max-w-[560px] border border-ink bg-surface shadow-[8px_8px_0_var(--color-accent)]">
+            <label
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDrag(true);
+              }}
+              onDragLeave={() => setDrag(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDrag(false);
+                choose(e.dataTransfer.files[0]);
+              }}
+              className={cx(
+                "group m-3 flex cursor-pointer items-center gap-4 border border-dashed px-4 py-5 transition-colors",
+                drag ? "border-accent-deep bg-accent-soft" : "border-ink/30 hover:border-ink hover:bg-raised/60",
+              )}
+            >
+              <input
+                ref={input}
+                type="file"
+                className="sr-only"
+                accept={ACCEPTED_EXTENSIONS.map((e) => "." + e).join(",") + ",audio/*"}
+                onChange={(e) => choose(e.target.files?.[0])}
+              />
+              <span className="grid size-11 shrink-0 place-items-center bg-ink text-surface transition-colors group-hover:bg-accent group-hover:text-accent-ink">
+                {file ? <Icon.file /> : <Icon.upload />}
+              </span>
+              <span className="min-w-0 flex-1">
+                {file ? (
+                  <>
+                    <span className="block truncate text-[15px] font-medium">{file.name}</span>
+                    <span className="block font-mono text-[11px] text-ink-3">
+                      {(file.size / 1024 / 1024).toFixed(1)} MB · click to change
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="block text-[15px] font-medium">
+                      Drop an audio file, or <span className="underline decoration-accent decoration-2 underline-offset-4">browse</span>
+                    </span>
+                    <span className="block font-mono text-[11px] text-ink-3">
+                      {ACCEPTED_EXTENSIONS.map((e) => e.toUpperCase()).join(" · ")} · up to {MAX_UPLOAD_MB} MB
+                    </span>
+                  </>
+                )}
+              </span>
+            </label>
+
+            <div className="mx-3 mb-3">
+              <label htmlFor="glossary" className="font-mono text-[10.5px] tracking-[0.14em] text-ink-3">
+                EXPECTED TERMS · OPTIONAL
+              </label>
+              <input
+                id="glossary"
+                value={glossary}
+                onChange={(e) => setGlossary(e.target.value)}
+                placeholder="Names and jargon, e.g. Priya, Kubernetes, RAG"
+                className="mt-1 h-9 w-full border-b border-line bg-transparent text-[14px] placeholder:text-ink-3/80 focus:border-ink focus:outline-none"
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-3 border-t border-ink px-3 py-3">
+              {mock ? (
+                <button onClick={onSample} className="font-mono text-[11px] tracking-[0.1em] text-ink-2 hover:text-ink">
+                  OPEN SAMPLE MEETING →
+                </button>
+              ) : (
+                <span className="font-mono text-[11px] text-ink-3">English speech works best</span>
+              )}
+              <button
+                disabled={!!localError || busy}
+                // With no file yet, the button opens the file picker instead.
+                onClick={() => (file ? onStart(file, glossary) : input.current?.click())}
+                className="inline-flex h-10 items-center gap-2 bg-accent px-5 text-[14px] font-bold text-accent-ink transition hover:bg-ink hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {busy ? "Uploading…" : file ? "Start processing" : "Choose a recording"}
+                <span aria-hidden>→</span>
+              </button>
+            </div>
+          </div>
+
+          {shown && (
+            <div role="alert" className="mt-5 flex max-w-[560px] items-start gap-3 border border-bad bg-bad-soft p-3.5">
+              <Icon.alert className="mt-0.5 text-bad" />
+              <div className="flex-1">
+                <div className="text-[14px] font-medium text-bad">{shown.user_message}</div>
+                <div className="font-mono text-[10.5px] text-ink-3">{shown.code}</div>
+              </div>
+              <button onClick={retry} className="shrink-0 border border-ink bg-surface px-2.5 py-1 text-[12px] font-medium hover:bg-ink hover:text-surface">
+                Try another file
+              </button>
+            </div>
+          )}
+
+          <div className="mt-10 flex flex-col items-end gap-5 lg:hidden">
+            <Promise_ label="Owners & deadlines" value="only when stated" />
+            <Promise_ label="Decisions" value="only when agreed" />
+          </div>
+        </section>
+
+        <section className="relative hidden h-[560px] lg:block" aria-label="How Trace links a record to the recording">
+          <div className="halftone absolute top-[40px] left-[26%] size-[430px] rounded-full" />
+          <div className="absolute top-[150px] left-[-2%] origin-top-left scale-[0.98] xl:scale-[1.05]">
             <HeroIllustration />
           </div>
-        </div>
-      ) : (
-        <div className="relative flex min-h-full flex-col items-center px-4 pt-16 pb-28">
-          {card}
-          {actions}
-        </div>
-      )}
+          <div className="absolute right-0 bottom-0 flex flex-col items-end gap-6">
+            <Promise_ label="Owners & deadlines" value="only when stated" />
+            <Promise_ label="Decisions" value="only when agreed" />
+          </div>
+        </section>
+      </main>
 
-      <div className={cx("absolute z-10", wide ? "right-[2.4%] bottom-[7%]" : "right-4 bottom-5")}>
-        <DatePill />
-      </div>
+      <footer className="relative z-10 flex flex-wrap items-center justify-between gap-2 border-t border-line px-5 py-3 font-mono text-[10.5px] tracking-[0.12em] text-ink-3 sm:px-10">
+        <span>INTER IIT TECH MEET 15.0 · ML PROBLEM STATEMENT</span>
+        <span>SPEECH → REFINE → RECORD</span>
+      </footer>
     </div>
   );
 }

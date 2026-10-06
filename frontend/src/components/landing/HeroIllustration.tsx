@@ -1,110 +1,101 @@
-// Decorative right-hand visual on the landing screen: audio → transcript line →
-// action item, the evidence chain the app is built around. 560 × 250 px.
+// Decorative visual on the landing screen: audio → transcript line → action
+// item, the evidence chain the app is built around. 560 × 260 px.
 
 const BARS = [
-  10, 18, 26, 14, 34, 22, 44, 30, 52, 38, 26, 58, 46, 70, 54, 40, 76, 62, 88, 70, 50, 64, 40, 54, 30, 44, 24, 32, 16, 22, 12,
+  8, 14, 22, 12, 30, 20, 40, 26, 48, 34, 22, 54, 42, 66, 50, 36, 72, 58, 84, 64, 46, 60, 36, 50, 26, 40, 20, 28, 14, 18, 10,
 ];
+const PLAYHEAD_BAR = 18;
 
 function Waveform() {
   return (
-    <div className="absolute top-[127px] left-0 flex -translate-y-1/2 items-center gap-[3px]">
-      {BARS.map((h, i) => {
-        const centre = 1 - Math.abs(i - 18) / 18; // brightest near the playhead
-        return (
-          <span
-            key={i}
-            className="w-[3px] rounded-full"
-            style={{
-              height: h * 0.75,
-              background: `linear-gradient(180deg, rgba(190,225,255,${0.55 + centre * 0.45}), rgba(70,140,255,${0.5 + centre * 0.4}))`,
-              boxShadow: centre > 0.8 ? "0 0 8px rgba(150,210,255,0.8)" : undefined,
-            }}
-          />
-        );
-      })}
+    <div className="absolute top-[132px] left-0 flex -translate-y-1/2 items-center gap-[3px]">
+      {BARS.map((h, i) => (
+        <span
+          key={i}
+          className={i >= PLAYHEAD_BAR - 3 && i <= PLAYHEAD_BAR + 2 ? "w-[3px] bg-accent" : "w-[3px] bg-ink"}
+          style={{ height: h * 0.8, opacity: i > PLAYHEAD_BAR + 2 ? 0.35 : 1 }}
+        />
+      ))}
     </div>
   );
 }
 
-const Dot = ({ x, y }: { x: number; y: number }) => (
+const Node = ({ x, y }: { x: number; y: number }) => (
   <span
-    className="absolute size-[7px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-white"
-    style={{ left: x, top: y, boxShadow: "0 0 0 3px rgba(120,180,255,0.45), 0 0 12px rgba(160,210,255,0.9)" }}
+    className="absolute size-[9px] -translate-x-1/2 -translate-y-1/2 border-2 border-ink bg-accent"
+    style={{ left: x, top: y }}
   />
 );
 
 const Line = ({ w, y }: { w: number; y: number }) => (
-  <span className="absolute left-[15px] h-[5px] rounded-full bg-white/25" style={{ width: w, top: y }} />
+  <span className="absolute left-[16px] h-[4px] bg-ink/10" style={{ width: w, top: y }} />
 );
 
 export function HeroIllustration() {
   return (
-    <div className="relative h-[250px] w-[560px] select-none" aria-hidden>
+    <div className="relative h-[260px] w-[560px] select-none" aria-hidden>
       <Waveform />
 
       {/* playhead */}
-      <span className="absolute top-[77px] left-[108px] h-[108px] border-l border-dotted border-white/70" />
-      <span className="absolute top-[193px] left-[108px] -translate-x-1/2 rounded-full border border-white/25 bg-black/60 px-1.5 py-px font-mono text-[9.5px] text-white/90">
+      <span className="absolute top-[78px] left-[108px] h-[112px] border-l border-dashed border-ink/60" />
+      <span className="absolute top-[198px] left-[108px] -translate-x-1/2 bg-ink px-1.5 py-px font-mono text-[9.5px] text-surface">
         02:14
       </span>
 
-      {/* connectors */}
-      <svg className="absolute inset-0 overflow-visible" width="560" height="250">
-        <defs>
-          <linearGradient id="hero-wire" x1="0" x2="1">
-            <stop offset="0" stopColor="#cfe6ff" />
-            <stop offset="1" stopColor="#5b8cff" />
-          </linearGradient>
-        </defs>
-        <path d="M108,77 C140,77 136,105 165,105" fill="none" stroke="url(#hero-wire)" strokeWidth="1.6" />
-        <path d="M354,102 C384,102 376,139 405,139" fill="none" stroke="url(#hero-wire)" strokeWidth="1.6" />
+      <svg className="absolute inset-0 overflow-visible" width="560" height="260">
+        <path d="M108,78 C140,78 136,108 166,108" fill="none" className="stroke-ink" strokeWidth="1.2" />
+        <path d="M354,108 C384,108 376,146 406,146" fill="none" className="stroke-ink" strokeWidth="1.2" />
       </svg>
 
       {/* transcript card */}
-      <div className="glass absolute top-[2px] left-[157px] h-[210px] w-[204px] rounded-[14px]">
-        <div className="absolute top-[14px] left-[15px] font-mono text-[8.5px] tracking-[0.14em] text-white/60">TRANSCRIPT</div>
-        <Line w={150} y={33} />
-        <Line w={112} y={49} />
+      <div className="absolute top-[4px] left-[158px] h-[214px] w-[204px] border border-ink/15 bg-surface shadow-[6px_6px_0_rgba(17,17,17,0.06)]">
+        <div className="absolute top-[13px] left-[16px] font-mono text-[8.5px] tracking-[0.16em] text-ink-3">TRANSCRIPT</div>
+        <Line w={150} y={34} />
+        <Line w={112} y={50} />
         <Line w={164} y={66} />
-        <div className="absolute top-[81px] left-[8px] w-[188px] rounded-[6px] border border-white/60 bg-blue-500/25 px-[8px] py-[5px] shadow-[0_0_14px_rgba(120,180,255,0.35)]">
-          <div className="text-[8.5px] font-medium text-sky-200">S030 · Priya</div>
-          <div className="text-[9.5px] leading-tight tracking-[-0.01em] whitespace-nowrap text-white">I'll update the dashboards by Monday.</div>
+        <div className="absolute top-[84px] left-[9px] w-[186px] px-[7px] py-[5px]">
+          <div className="font-mono text-[8px] text-ink-3">S030 · PRIYA</div>
+          <div className="mt-[2px] text-[10.5px] leading-[1.35] text-ink">
+            I'll update the dashboards
+            <br />
+            <span className="hl">by Monday.</span>
+          </div>
         </div>
-        <Line w={142} y={127} />
-        <Line w={172} y={143} />
-        <Line w={90} y={159} />
-        <Line w={156} y={183} />
+        <Line w={142} y={134} />
+        <Line w={172} y={150} />
+        <Line w={90} y={166} />
+        <Line w={156} y={190} />
       </div>
 
-      {/* action item cards */}
-      <div className="glass absolute top-[30px] left-[393px] h-[136px] w-[166px] rounded-[12px] px-[13px] pt-[14px]">
-        <div className="font-mono text-[8px] tracking-[0.14em] text-white/60">ACTION ITEM</div>
-        <div className="mt-[5px] text-[12px] font-bold tracking-[-0.01em] whitespace-nowrap text-white">Update the dashboards</div>
-        <dl className="mt-[9px] grid grid-cols-[50px_1fr] gap-y-[5px] text-[9px]">
-          <dt className="text-white/55">Owner</dt>
-          <dd className="font-semibold text-white">Priya</dd>
-          <dt className="text-white/55">Due</dt>
-          <dd className="font-semibold text-white">Monday</dd>
+      {/* action items */}
+      <div className="absolute top-[32px] left-[394px] h-[140px] w-[166px] border border-ink/15 bg-surface px-[14px] pt-[13px] shadow-[6px_6px_0_rgba(17,17,17,0.06)]">
+        <div className="font-mono text-[8px] tracking-[0.16em] text-ink-3">ACTION ITEM</div>
+        <div className="mt-[6px] text-[12.5px] leading-tight font-bold whitespace-nowrap text-ink">Update the dashboards</div>
+        <dl className="mt-[10px] grid grid-cols-[46px_1fr] gap-y-[5px] text-[9.5px]">
+          <dt className="text-ink-3">Owner</dt>
+          <dd className="font-medium text-ink">Priya</dd>
+          <dt className="text-ink-3">Due</dt>
+          <dd className="font-medium text-ink">Monday</dd>
         </dl>
+        <span className="absolute bottom-[14px] left-[14px] flex items-center gap-1 bg-ink px-[7px] py-[2px] font-mono text-[8.5px] text-surface">
+          <svg viewBox="0 0 10 10" className="size-[6px] fill-accent">
+            <path d="M2 1v8l7-4z" />
+          </svg>
+          S030
+        </span>
       </div>
-      <span className="absolute top-[130px] left-[412px] flex items-center gap-1 rounded-full border border-sky-300/70 bg-blue-600/40 px-[9px] py-[2px] text-[9px] font-semibold text-white shadow-[0_0_10px_rgba(90,150,255,0.5)]">
-        <svg viewBox="0 0 10 10" className="size-[7px] fill-white">
-          <path d="M2 1v8l7-4z" />
-        </svg>
-        S030
-      </span>
 
-      <div className="glass absolute top-[180px] left-[393px] h-[62px] w-[166px] rounded-[10px] px-[14px] pt-[12px]">
-        <div className="text-[11px] font-semibold text-white">Clean up the test data</div>
+      <div className="absolute top-[186px] left-[394px] h-[62px] w-[166px] border border-ink/15 bg-surface px-[14px] pt-[11px] shadow-[6px_6px_0_rgba(17,17,17,0.06)]">
+        <div className="text-[11px] font-bold text-ink">Clean up the test data</div>
         <div className="mt-[7px] flex items-center gap-[10px] text-[9px]">
-          <span className="text-white/55">Owner</span>
-          <span className="rounded-full border border-dashed border-white/50 px-[8px] py-px text-white/80">Unspecified</span>
+          <span className="text-ink-3">Owner</span>
+          <span className="rounded-full border border-dashed border-unspec/70 px-[7px] py-px text-unspec">Unspecified</span>
         </div>
       </div>
 
-      <Dot x={108} y={77} />
-      <Dot x={165} y={105} />
-      <Dot x={405} y={139} />
+      <Node x={108} y={78} />
+      <Node x={166} y={108} />
+      <Node x={406} y={146} />
     </div>
   );
 }
