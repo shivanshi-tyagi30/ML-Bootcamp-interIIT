@@ -1,0 +1,195 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { Api } from "../lib/api";
+import type { TranscriptMode } from "../lib/annotate";
+import { fmtTime } from "../lib/format";
+import type { JobError, PartialRecord, Segment } from "../lib/types";
+import { useAudio } from "../lib/useAudio";
+import { DownloadMenu } from "./DownloadMenu";
+import { PlayerBar, type Pin } from "./PlayerBar";
+import { RecordPane, type RecordTab } from "./RecordPane";
+import { Legend, Scorecard } from "./Scorecard";
+import { TranscriptPane } from "./TranscriptPane";
+import { Button, Icon, Tip } from "./ui";
+
+interface Props {
+  api: Api;
+  jobId: string;
+  record: PartialRecord;
+  audioUrl: string | null;
+  error?: JobError;
+  theme: "light" | "dark";
+  onTheme: () => void;
+  onNew: () => void;
+}
+
+/** Plays a moment slightly early so the listener hears it in context. */
+const LEAD_IN_S = 2;
+
+export function Workspace({ api, jobId, record, audioUrl, error, theme, onTheme, onNew }: Props) {
+  const raw = record.raw_transcript ?? [];
+  const audio = useAudio(audioUrl, record.meta.duration_s ?? raw.at(-1)?.end ?? 0);
+  const [mode, setMode] = useState<TranscriptMode>(record.refinement ? "diff" : "raw");
+  const [tab, setTab] = useState<RecordTab>("summary");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [scrollTo, setScrollTo] = useState<{ id: string; nonce: number } | null>(null);
+
+  const segments = useMemo(() => new Map<string, Segment>(raw.map((s) => [s.id, s])), [raw]);
+
+  // Coverage dimming: lines not cited by any summary or minutes sentence.
+  const cited = useMemo(() => {
+    if (!record.summary) return null;
+    const ids = new Set<string>();
+    record.summary.forEach((s) => s.evidence_segment_ids.forEach((i) => ids.add(i)));
+    record.minutes?.forEach((t) => t.points.forEach((p) => p.evidence_segment_ids.forEach((i) => ids.add(i))));
+    return ids;
+  }, [record]);
+
+  const startOf = useCallback(
+    (ids: string[]) => Math.min(...ids.map((i) => segments.get(i)?.start ?? Infinity)),
+    [segments],
+  );
+
+  // Decisions and tasks in time order: timeline pins and J/K navigation.
+  const pins: Pin[] = useMemo(() => {
+    const out: Pin[] = [
+      ...(record.decisions ?? []).map((d) => ({ id: d.id, kind: "decision" as const, label: d.decision, time: startOf(d.evidence_segment_ids) })),
+      ...(record.action_items ?? []).map((a) => ({ id: a.id, kind: "task" as const, label: a.task, time: startOf(a.evidence_segment_ids) })),
+    ];
+    return out.filter((p) => isFinite(p.time)).sort((a, b) => a.time - b.time);
+  }, [record, startOf]);
+
+  const activeId = useMemo(() => {
+    if (!audio.available || (!audio.playing && audio.time === 0)) return null;
+    return raw.find((s) => audio.time >= s.start && audio.time < s.end)?.id ?? null;
+  }, [raw, audio.time, audio.playing, audio.available]);
+
+  const jump = useCallback(
+    (ids: string[], itemId?: string) => {
+      const first = [...ids].sort((a, b) => (segments.get(a)?.start ?? 0) - (segments.get(b)?.start ?? 0))[0];
+      if (!first) return;
+      setScrollTo({ id: first, nonce: Date.now() });
+      if (itemId) setSelectedId(itemId);
+      const seg = segments.get(first);
+      if (seg && audio.available) audio.playFrom(seg.start - LEAD_IN_S);
+    },
+    [segments, audio],
+  );
+
+  const selectPin = useCallback(
+    (id: string) => {
+      const isDecision = record.decisions?.some((d) => d.id === id);
+      setTab(isDecision ? "decisions" : "actions");
+      const ids =
+        record.decisions?.find((d) => d.id === id)?.evidence_segment_ids ??
+        record.action_items?.find((a) => a.id === id)?.evidence_segment_ids ??
+        [];
+      jump(ids, id);
+    },
+    [record, jump],
+  );
+
+  // Keyboard: Space play/pause, J/K next/previous decision or task.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement;
+      if (t.closest("input, textarea, select, [contenteditable=true]") || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === " " && !t.closest("button, [role=slider]")) {
+        e.preventDefault();
+        audio.toggle();
+      } else if ((e.key === "j" || e.key === "k") && pins.length) {
+        const i = pins.findIndex((p) => p.id === selectedId);
+        const next = e.key === "j" ? (i + 1) % pins.length : i <= 0 ? pins.length - 1 : i - 1;
+        selectPin(pins[next].id);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [audio, pins, selectedId, selectPin]);
+
+  const m = record.meta.models ?? {};
+
+  return (
+    <div className="flex h-full flex-col">
+      <audio ref={audio.ref} src={audioUrl ?? undefined} preload="metadata" />
+
+      <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-line bg-surface px-4 py-2.5">
+        <div className="flex items-center gap-2 text-sm font-semibold tracking-wide text-accent">
+          <span className="grid size-6 place-items-center rounded-md bg-accent text-[11px] font-bold text-accent-ink">T</span>
+          TRACE
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium">{record.meta.source_file ?? "Recording"}</div>
+          <div className="truncate text-xs text-ink-3">
+            {fmtTime(record.meta.duration_s ?? audio.duration)}
+            {(m.stt || m.lm1 || m.lm2) && (
+              <Tip
+                className="ml-2 cursor-help"
+                content={
+                  <dl className="grid grid-cols-[auto_1fr] gap-x-3">
+                    {m.stt && <><dt className="text-ink-3">Speech</dt><dd>{m.stt}</dd></>}
+                    {m.stt_check && <><dt className="text-ink-3">Second opinion</dt><dd>{m.stt_check}</dd></>}
+                    {m.lm1 && <><dt className="text-ink-3">LM1 refiner</dt><dd>{m.lm1}</dd></>}
+                    {m.lm2 && <><dt className="text-ink-3">LM2 documenter</dt><dd>{m.lm2}</dd></>}
+                  </dl>
+                }
+              >
+                · {[m.stt, m.lm1, m.lm2].filter(Boolean).join(" / ")}
+              </Tip>
+            )}
+          </div>
+        </div>
+        <DownloadMenu api={api} jobId={jobId} record={record} />
+        <Button variant="ghost" onClick={onTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}>
+          {theme === "dark" ? <Icon.sun /> : <Icon.moon />}
+        </Button>
+        <Button onClick={onNew}>
+          <Icon.plus /> New recording
+        </Button>
+      </header>
+
+      {error && record.summary == null && (
+        <div role="alert" className="flex items-center gap-2 border-b border-bad/30 bg-bad-soft px-4 py-2 text-sm text-bad">
+          <Icon.alert /> {error.user_message}
+          <span className="font-mono text-[11px] text-ink-3">{error.code}</span>
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-surface/60 px-3 py-1.5">
+        <Scorecard f={record.fidelity ?? {}} />
+        <Legend />
+      </div>
+
+      <main className="grid min-h-0 flex-1 grid-cols-1 divide-line max-md:overflow-y-auto md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] md:divide-x">
+        <TranscriptPane
+          raw={raw}
+          accepted={record.refinement?.accepted ?? []}
+          rejected={record.refinement?.rejected ?? []}
+          hasRefinement={!!record.refinement}
+          mode={mode}
+          onMode={setMode}
+          cited={cited}
+          activeId={activeId}
+          scrollTo={scrollTo}
+          onSeek={(t) => audio.available && audio.playFrom(t)}
+        />
+        <RecordPane
+          record={record}
+          segments={segments}
+          tab={tab}
+          onTab={setTab}
+          selectedId={selectedId}
+          onJump={jump}
+          error={error}
+        />
+      </main>
+
+      <PlayerBar audio={audio} pins={pins} selectedId={selectedId} onPin={selectPin} />
+      <div className="flex justify-between border-t border-line bg-surface px-4 py-1 text-[11px] text-ink-3">
+        <span>{audio.available ? "Click any chip or timestamp to hear that moment." : "Audio playback is unavailable for this record."}</span>
+        <span className="hidden sm:inline">
+          <kbd className="font-mono">Space</kbd> play/pause · <kbd className="font-mono">J</kbd>/<kbd className="font-mono">K</kbd> next/previous item
+        </span>
+      </div>
+    </div>
+  );
+}
