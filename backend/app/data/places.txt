@@ -1,0 +1,166 @@
+# Standard spellings of Indian places and institutions. The guard lets LM1 correct a capitalized word to one of
+# these (e.g. "Guhati" -> "Guwahati") when it sounds the same; people's names are never in this list.
+# One entry per line; lines starting with # are ignored. Add your own as needed.
+Andhra Pradesh
+Arunachal Pradesh
+Assam
+Bihar
+Chhattisgarh
+Goa
+Gujarat
+Haryana
+Himachal Pradesh
+Jharkhand
+Karnataka
+Kerala
+Madhya Pradesh
+Maharashtra
+Manipur
+Meghalaya
+Mizoram
+Nagaland
+Odisha
+Punjab
+Rajasthan
+Sikkim
+Tamil Nadu
+Telangana
+Tripura
+Uttar Pradesh
+Uttarakhand
+West Bengal
+Jammu and Kashmir
+Ladakh
+Puducherry
+Chandigarh
+Delhi
+New Delhi
+Mumbai
+Kolkata
+Chennai
+Bengaluru
+Bangalore
+Hyderabad
+Ahmedabad
+Pune
+Jaipur
+Lucknow
+Kanpur
+Nagpur
+Indore
+Bhopal
+Patna
+Ranchi
+Raipur
+Bhubaneswar
+Guwahati
+Shillong
+Dehradun
+Varanasi
+Prayagraj
+Allahabad
+Agra
+Noida
+Gurugram
+Gurgaon
+Ghaziabad
+Faridabad
+Surat
+Vadodara
+Rajkot
+Gandhinagar
+Visakhapatnam
+Vijayawada
+Thiruvananthapuram
+Kochi
+Kozhikode
+Coimbatore
+Madurai
+Tiruchirappalli
+Tirupati
+Mysuru
+Mangaluru
+Hubballi
+Dharwad
+Belagavi
+Goa
+Panaji
+Srinagar
+Jammu
+Amritsar
+Ludhiana
+Jalandhar
+Ropar
+Rupnagar
+Mandi
+Roorkee
+Haridwar
+Kharagpur
+Durgapur
+Siliguri
+Asansol
+Dhanbad
+Jamshedpur
+Jodhpur
+Udaipur
+Kota
+Bhilai
+Gwalior
+Jabalpur
+Palakkad
+Silchar
+Imphal
+Agartala
+Aizawl
+Kohima
+Itanagar
+Gangtok
+Port Blair
+Nashik
+Aurangabad
+Kolhapur
+Solapur
+Warangal
+Nellore
+Guntur
+Cuttack
+Rourkela
+Berhampur
+Sambalpur
+Bareilly
+Meerut
+Aligarh
+Moradabad
+Gorakhpur
+Jhansi
+Indian Institute of Technology
+Inter IIT
+Tech Meet
+IIT Bombay
+IIT Delhi
+IIT Madras
+IIT Kanpur
+IIT Kharagpur
+IIT Roorkee
+IIT Guwahati
+IIT Hyderabad
+IIT Indore
+IIT Mandi
+IIT Ropar
+IIT Patna
+IIT Gandhinagar
+IIT Jodhpur
+IIT Bhubaneswar
+IIT Varanasi
+IIT BHU
+IIT Dhanbad
+IIT ISM Dhanbad
+IIT Tirupati
+IIT Palakkad
+IIT Bhilai
+IIT Goa
+IIT Jammu
+IIT Dharwad
+IISc
+NIT
+IIIT

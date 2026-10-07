@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, type Api } from "../lib/api";
 import type { TranscriptMode } from "../lib/annotate";
 import { fmtTime } from "../lib/format";
@@ -111,6 +111,9 @@ export function Workspace({ api, jobId, record, audioUrl, error, theme, onTheme,
   }, [audio, pins, selectedId, selectPin]);
 
   const m = record.meta.models ?? {};
+  // Slowest steps first, so the tooltip shows where the time went.
+  const timings = Object.entries(record.meta.timings ?? {}).sort((a, b) => b[1] - a[1]);
+  const totalSec = timings.reduce((t, [, s]) => t + s, 0);
 
   return (
     <div className="flex h-full flex-col">
@@ -136,6 +139,23 @@ export function Workspace({ api, jobId, record, audioUrl, error, theme, onTheme,
                 }
               >
                 · {[m.stt, m.lm1, m.lm2].filter(Boolean).join(" / ")}
+              </Tip>
+            )}
+            {timings.length > 0 && (
+              <Tip
+                className="ml-2 cursor-help"
+                content={
+                  <dl className="grid grid-cols-[auto_auto] gap-x-3">
+                    {timings.map(([stage, s]) => (
+                      <Fragment key={stage}>
+                        <dt className="text-ink-3">{stage.replace("_", " ")}</dt>
+                        <dd className="text-right tabular-nums">{s.toFixed(1)} s</dd>
+                      </Fragment>
+                    ))}
+                  </dl>
+                }
+              >
+                · processed in {fmtTime(totalSec)}
               </Tip>
             )}
           </div>

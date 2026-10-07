@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     LLM_MAX_CONTEXT: int = 32768  # largest context window requested from Ollama
     OLLAMA_KEEP_ALIVE: str = "-1m"  # negative = keep models loaded forever, so no user waits for a reload
     LM2_SCRATCHPAD: bool = True
+    # Separate LM1 vocabulary call: "auto" skips it when the meeting fits in one refine window (saves a
+    # whole LLM call on short meetings), "always" runs it, "never" skips it.
+    VOCAB_PASS: Literal["auto", "always", "never"] = "auto"
     # Load every model before the server accepts requests, so no user waits for loading.
     WARMUP_ON_START: bool = True
     # Free LM1's RAM before LM2 runs. Only for big models on a 16 GB laptop: LM1 must then reload for every job.

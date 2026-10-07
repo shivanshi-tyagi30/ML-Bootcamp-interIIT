@@ -96,6 +96,8 @@ export interface MeetingRecord {
     models?: { stt?: string; stt_check?: string; diarization?: string; lm1?: string; lm2?: string };
     warnings?: string[];
     generated_at?: string;
+    /** Seconds per pipeline stage (from the job's timings.json; not part of record.json). */
+    timings?: Record<string, number>;
   };
   raw_transcript: Segment[];
   refined_transcript: Segment[];

@@ -109,7 +109,8 @@ def verify(
     order = {s.id: i for i, s in enumerate(refined)}
     stats = VerifyStats()
     known = lambda ids: [i for i in dict.fromkeys(ids) if i in seg]  # noqa: E731
-    cited_text = lambda ids: " ".join(seg[i].text for i in ids)  # noqa: E731
+    # Speaker labels count as cited text, so "Speaker 2 reported..." is grounded in Speaker 2's lines.
+    cited_text = lambda ids: " ".join(f"{seg[i].speaker or ''} {seg[i].text}" for i in ids)  # noqa: E731
     thr = settings.QUOTE_MATCH_THRESHOLD
 
     # 1-2. Summary and minutes: known ids only, no new facts.
