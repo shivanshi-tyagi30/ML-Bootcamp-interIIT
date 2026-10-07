@@ -61,6 +61,7 @@ class JobDetail(BaseModel):
     job: JobSummary
     record: MeetingRecord | None = None
     partial: PartialResults
+    timings: dict[str, float] | None = None  # seconds per stage, from timings.json
 
 
 class RenameRequest(BaseModel):

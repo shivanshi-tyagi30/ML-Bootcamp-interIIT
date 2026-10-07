@@ -111,16 +111,18 @@ interface ServerJobDetail {
     refined_transcript: PartialRecord["refined_transcript"] | null;
     refinement: PartialRecord["refinement"] | null;
   };
+  timings?: Record<string, number> | null;
 }
 
 function toJobState(d: ServerJobDetail): JobState {
   const { job } = d;
-  const record: PartialRecord = d.record ?? {
+  const base: PartialRecord = d.record ?? {
     meta: { job_id: job.id, title: job.title, source_file: job.source_file, duration_s: job.duration_s ?? undefined },
     raw_transcript: d.partial.raw_transcript ?? undefined,
     refined_transcript: d.partial.refined_transcript ?? undefined,
     refinement: d.partial.refinement ?? undefined,
   };
+  const record: PartialRecord = d.timings ? { ...base, meta: { ...base.meta, timings: d.timings } } : base;
   return {
     job_id: job.id,
     stage: (job.status === "failed" ? "failed" : job.stage) as Stage,

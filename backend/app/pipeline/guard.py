@@ -64,31 +64,48 @@ def _touches_disputed_frozen(edit: Edit, seg: Segment, start: int) -> bool:
     return False
 
 
+KNOWN_TERM_FILES = ("places.txt", "tech_terms.txt")
+
+
 @lru_cache
-def known_places() -> frozenset[str]:
-    """Lower-cased standard spellings of places and institutions (app/data/places.txt)."""
-    path = Path(__file__).resolve().parent.parent / "data" / "places.txt"
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return frozenset()
-    return frozenset(ln.strip().lower() for ln in lines if ln.strip() and not ln.startswith("#"))
+def known_terms() -> frozenset[str]:
+    """Lower-cased standard spellings of places, institutions and technical terms (app/data/*.txt)."""
+    out: set[str] = set()
+    for name in KNOWN_TERM_FILES:
+        path = Path(__file__).resolve().parent.parent / "data" / name
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        out |= {ln.strip().lower() for ln in lines if ln.strip() and not ln.startswith("#")}
+    return frozenset(out)
+
+
+known_places = known_terms  # older name
+
+
+def _squash(s: str) -> str:
+    """Lower case without spaces, hyphens or dots ("Fast API" == "FastAPI")."""
+    return re.sub(r"[\s\-.]", "", s.lower())
 
 
 def _name_changed(edit: Edit, seg: Segment, start: int, vocab_terms: set[str]) -> bool:
     """A non-initial capitalized token in `original` is changed without support.
 
-    Supported: the replacement is a meeting vocabulary term (which includes the user's glossary) or a
-    known place/institution spelling (e.g. "Guhati" -> "Guwahati"). People's names are in neither list,
-    so they stay as heard. Sound-alike is still checked afterwards.
+    Supported: only spacing or capitalization changes ("Fast API" -> "FastAPI"), a meeting vocabulary
+    term (which includes the user's glossary), or a known place/institution/technical spelling
+    (e.g. "Guhati" -> "Guwahati", "Pie Torch" -> "PyTorch"). People's names are in none of these, so they
+    stay as heard. Sound-alike is still checked afterwards.
     """
     caps = [c for c in capitalized_non_initial(seg.text[: start + len(edit.original)]) if c in edit.original]
     changed = [c for c in caps if c not in edit.replacement]
     if not changed:
         return False
+    if _squash(edit.original) == _squash(edit.replacement):
+        return False
     r = edit.replacement.lower().strip()
     in_vocab = r in vocab_terms or any(t and t in r for t in vocab_terms)
-    return not (in_vocab or r in known_places())
+    return not (in_vocab or r in known_terms())
 
 
 def check_edit(edit: Edit, seg: Segment | None, vocab_terms: set[str], settings: Settings) -> str | None:

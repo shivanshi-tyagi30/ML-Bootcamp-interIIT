@@ -64,8 +64,17 @@ async def build_vocabulary(ctx: "JobContext") -> None:
     """Stage function: write 06_vocabulary.json; any failure yields an empty vocabulary."""
     out_name = ctx.output_name(Stage.VOCABULARY)
     glossary = ctx.upload.get("glossary", [])
+    raw = ctx.read(ctx.output_name(Stage.RAW_SAVED))
+    mode = ctx.settings.VOCAB_PASS
+    one_window = len(raw) <= ctx.settings.LM1_WINDOW_SEGMENTS
+    if mode == "never" or (mode == "auto" and one_window):
+        # The refiner sees the whole meeting in one call, so a separate pass adds a full LLM call for
+        # little gain. The user's expected terms and the known-terms lists still apply.
+        vocab = merge_vocabularies([Vocabulary(domain="unknown", terms=[])], glossary)
+        ctx.log.info("vocabulary pass skipped (short meeting, one refine window)")
+        ctx.write(out_name, vocab)
+        return
     try:
-        raw = ctx.read(ctx.output_name(Stage.RAW_SAVED))
         chunks = chunk_lines(transcript_lines(raw), CHUNK_TOKENS)
         system = load_prompt("lm1_vocabulary")
         parts = []

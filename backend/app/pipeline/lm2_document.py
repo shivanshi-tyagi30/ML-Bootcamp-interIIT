@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Any
 
 from rapidfuzz import fuzz
@@ -27,10 +26,20 @@ NO_SCRATCHPAD_NOTE = (
 )
 
 
+REMINDER = (
+    "\n\nREMINDER: summary and minutes are your own short notes in the third person "
+    "(\"The team agreed...\", \"Speaker 2 reported...\"). Do not copy transcript sentences. "
+    "Every item cites segment ids."
+)
+
+
 def user_message(lines: list[str], schema_model: type = LM2Output) -> str:
-    """Transcript plus the JSON schema (helps servers without constrained decoding)."""
-    schema = json.dumps(schema_model.model_json_schema(), ensure_ascii=False)
-    return "TRANSCRIPT\n" + "\n".join(lines) + "\n\nJSON SCHEMA\n" + schema
+    """Transcript plus a closing reminder (small models follow the end of the prompt best).
+
+    The JSON schema is not repeated here: Ollama and vLLM already enforce it through constrained
+    decoding, and sending it as text cost ~1.5k extra prompt tokens on every call.
+    """
+    return "TRANSCRIPT\n" + "\n".join(lines) + REMINDER
 
 
 def overlapping_chunks(lines: list[str], max_tokens: int) -> list[list[str]]:

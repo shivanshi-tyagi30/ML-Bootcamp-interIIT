@@ -313,3 +313,91 @@ def test_prefetch_pulls_both_ollama_models(monkeypatch, settings):
     assert prefetch.main() == 0
     assert seen == [("/api/pull", {"model": "qwen3:4b", "stream": False}),
                     ("/api/pull", {"model": "gemma3:4b", "stream": False})]
+
+
+def test_short_meeting_skips_the_vocabulary_call(settings, fixtures_dir):
+    from app.core.events import EventBus
+    from app.pipeline.runner import Services, run_job
+    from tests.conftest import FakeLLM, FakeSTT
+    from tests.test_pipeline import JOB, _setup, _vad
+
+    def run(mode):
+        s = settings.model_copy(update={"VOCAB_PASS": mode})
+        llm = FakeLLM()
+
+        async def go():
+            db, _ = await _setup(s, fixtures_dir)
+            await run_job(JOB, s, db, EventBus(), Services(stt=FakeSTT(), vad=_vad, llm=llm))
+            return await db.get(JOB)
+
+        row = asyncio.run(go())
+        assert row["status"] == "completed", row
+        return llm.calls
+
+    assert "Vocabulary" not in run("auto")  # 8 segments fit in one refine window
+    import shutil
+
+    shutil.rmtree(settings.DATA_DIR, ignore_errors=True)
+    assert "Vocabulary" in run("always")
+
+
+def test_lm2_request_has_no_schema_text_and_ends_with_style_reminder():
+    from app.pipeline.lm2_document import user_message
+
+    msg = user_message(["[S001] (Speaker 1) Let's ship it."])
+    assert "JSON SCHEMA" not in msg and '"properties"' not in msg
+    assert msg.rstrip().endswith("Every item cites segment ids.")
+    assert "Do not copy transcript sentences" in msg
+
+
+def test_spacing_case_and_known_tech_fixes_pass_without_vocabulary():
+    from app.config import Settings
+    from app.models.record import Edit
+    from app.pipeline.guard import check_edit
+    from tests.conftest import seg
+
+    s = Settings()
+    edit = lambda o, r: Edit(segment_id="S001", original=o, replacement=r, category="technical_term",  # noqa: E731
+                             rationale="", confidence=0.9)
+    sg = seg("S001", 0, "The backend uses Fast API and Pie Torch with Rahul.")
+    assert check_edit(edit("Fast API", "FastAPI"), sg, set(), s) is None
+    assert check_edit(edit("Pie Torch", "PyTorch"), sg, set(), s) is None
+    assert check_edit(edit("Rahul", "Raul"), sg, set(), s) == "name_changed"
+
+
+def test_known_terms_never_include_people_names():
+    from app.pipeline.guard import known_terms
+
+    terms = known_terms()
+    assert {"guwahati", "pytorch", "fastapi"} <= terms
+    assert not {"claude", "gemma", "priya", "rahul"} & terms
+
+
+def test_minutes_may_name_the_speaker_of_cited_lines(settings):
+    from app.models.llm_io import LM2Output
+    from app.models.record import Meta, Refinement
+    from app.pipeline.verify import verify
+    from tests.conftest import sample_segments
+
+    segs = sample_segments()
+    lm2 = LM2Output(minutes=[{"topic": "Release", "points": [
+        {"text": "Latency rose from fifteen to fifty milliseconds, Speaker 2 reported.", "evidence_segment_ids": ["S003"]},
+        {"text": "The kernels are blocked, Speaker 3 said.", "evidence_segment_ids": ["S002"]},  # S002 is Speaker 2
+    ]}])
+    meta = Meta(job_id="x", title="t", source_file="f", duration_s=1, language="en", language_probability=1,
+                models={}, generated_at="2026-01-01T00:00:00Z")
+    rec = verify(lm2, segs, segs, Refinement(), meta, settings, diarization_on=True)
+    assert [p.text for p in rec.minutes[0].points] == ["Latency rose from fifteen to fifty milliseconds, Speaker 2 reported."]
+
+
+def test_job_detail_includes_stage_timings(settings, fixtures_dir):
+    from app.core.storage import write_json
+
+    async def runner(job_id: str) -> None:
+        return None
+
+    with TestClient(create_app(settings=settings, runner=runner)) as c:
+        with open(fixtures_dir / "tone.wav", "rb") as f:
+            job_id = c.post("/api/jobs", files={"file": ("tone.wav", f)}).json()["job_id"]
+        write_json(settings.jobs_dir / job_id / "timings.json", {"transcribing": 41.5, "documenting": 95.0})
+        assert c.get(f"/api/jobs/{job_id}").json()["timings"] == {"transcribing": 41.5, "documenting": 95.0}

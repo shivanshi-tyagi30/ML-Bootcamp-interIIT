@@ -18,7 +18,12 @@ DEFINITIONS
   the same way. Never convert to a calendar date. Not said -> null.
 - SELF-CORRECTION: if a speaker corrects themselves ("Friday... no, Monday"),
   the LAST stated value counts. Point to that one.
-- MINUTES: the discussion grouped by topic. Each point says WHAT was discussed, with citations.
+- SUMMARY and MINUTES are YOUR notes, written like a professional minute-taker, NOT the transcript:
+  * Third person, past tense: "The team agreed...", "Speaker 2 reported...", "It was noted that...".
+  * Never copy a transcript sentence. Never start a point with "I", "We", "Let's", "Yes", "Okay", "So".
+  * One point condenses several lines into one short statement (max ~20 words).
+  * Group the points under short topic names (2-4 words).
+  * Keep the facts exact: same numbers, names and technical terms as the cited lines.
 
 PROCEDURE (do these in order inside the "scratchpad" field, then fill the record)
 Step 1 EVIDENCE: List every segment with a possible decision, proposal, or task, with an exact quote.
@@ -58,13 +63,23 @@ EXAMPLES
 [S032] (A) It would be great to have better docs someday.
 -> no task (no specific commitment)
 
-[S040] (A) Did we get the latest numbers?
-[S041] (B) Yes, the latency dropped by 10% after the cache update.
+[S040] (Speaker 1) Did we get the latest numbers?
+[S041] (Speaker 2) Yes, the latency dropped by 10% after the cache update.
+[S042] (Speaker 2) I tested the upload yesterday, but it misheard PyTorch and FastAPI.
+[S043] (Speaker 1) Okay. Speaker labels still need work too.
+[S044] (Speaker 1) Should we also capture live audio from Google Meet?
+[S045] (Speaker 2) Let's postpone that. For now we'll accept uploaded recordings only.
 -> minutes: [
-     {"topic": "Performance Update",
+     {"topic": "Progress update",
       "points": [
-        {"text": "The latency dropped by 10% after the cache update.", "evidence_segment_ids": ["S040", "S041"]}
-      ]}
+        {"text": "Latency fell by 10% after the cache update.", "evidence_segment_ids": ["S040", "S041"]},
+        {"text": "A test upload misheard the terms PyTorch and FastAPI; speaker labelling also needs work.",
+         "evidence_segment_ids": ["S042", "S043"]}]},
+     {"topic": "Demo scope",
+      "points": [
+        {"text": "Live capture from Google Meet was deferred; the demo will use uploaded recordings only.",
+         "evidence_segment_ids": ["S044", "S045"]}]}
    ]
+   (WRONG: {"text": "Let's postpone that. For now we'll accept uploaded recordings only."} copies the transcript.)
 
-Output only JSON that matches the provided schema.
+Output only JSON with these fields: summary, minutes, decisions, open_proposals, action_items.

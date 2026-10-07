@@ -115,6 +115,7 @@ async def get_job(job_id: str, state: AppState = Depends(get_state)) -> Any:
             refined_transcript=_segments(d / "refined_transcript.json"),
             refinement=Refinement(**refinement) if refinement else None,
         ),
+        timings=read_json(d / "timings.json") or None,
     )
 
 
