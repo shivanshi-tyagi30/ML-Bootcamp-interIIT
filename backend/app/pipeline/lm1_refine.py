@@ -17,7 +17,8 @@ if TYPE_CHECKING:
     from app.pipeline.runner import JobContext
 
 # Edits are short; capping the output keeps a slow CPU model from rambling.
-MAX_EDIT_TOKENS = 1536
+MAX_EDIT_TOKENS_FULL = 1536
+MAX_EDIT_TOKENS_SHORT = 1024
 
 MARKER = re.compile(r"\[\[([^|\]]*)\|[^\]]*\]\]")
 
@@ -62,6 +63,7 @@ async def refine(ctx: "JobContext") -> None:
     vocab = ctx.read(ctx.output_name(Stage.VOCABULARY)) or {"domain": "unknown", "terms": []}
     system = load_prompt("lm1_refine")
     wins = windows(len(segs), ctx.settings.LM1_WINDOW_SEGMENTS, ctx.settings.LM1_CONTEXT_SEGMENTS)
+    max_tokens = MAX_EDIT_TOKENS_SHORT if len(segs) <= ctx.settings.LM1_WINDOW_SEGMENTS else MAX_EDIT_TOKENS_FULL
     edits: list[dict[str, Any]] = []
     domains: list[str] = []
     for k, win in enumerate(wins):
@@ -75,7 +77,7 @@ async def refine(ctx: "JobContext") -> None:
         try:
             out = await ctx.llm.json_call(
                 ctx.settings.LM1_MODEL, system, window_prompt(vocab, segs, win), LM1Output,
-                ctx.settings.LLM_MAX_RETRIES, max_tokens=MAX_EDIT_TOKENS, job_id=ctx.job_id, on_retry=on_retry,
+                ctx.settings.LLM_MAX_RETRIES, max_tokens=max_tokens, job_id=ctx.job_id, on_retry=on_retry,
             )
         except (InvalidModelOutput, LLMUnavailable) as e:
             raise PipelineError("E_LM1_FAILED", Stage.REFINING, f"window {k + 1}: {e}") from e

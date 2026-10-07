@@ -93,8 +93,10 @@ async def document(ctx: "JobContext") -> None:
     async def on_retry(msg: str) -> None:
         await ctx.progress(0.5, f"Writing the meeting record: {msg}")
 
-    call = lambda user, schema=record_schema: ctx.llm.json_call(  # noqa: E731
-        s.LM2_MODEL, system, user, schema, s.LLM_MAX_RETRIES, max_tokens=8192, job_id=ctx.job_id,
+    n_segments = len(refined)
+    lm2_max_tokens = 4096 if n_segments <= 50 else 8192
+    call = lambda user, schema=record_schema, mt=lm2_max_tokens: ctx.llm.json_call(  # noqa: E731
+        s.LM2_MODEL, system, user, schema, s.LLM_MAX_RETRIES, max_tokens=mt, job_id=ctx.job_id,
         on_retry=on_retry,
     )
     try:
@@ -119,6 +121,12 @@ async def document(ctx: "JobContext") -> None:
     except Exception as e:  # noqa: BLE001 - connection errors etc.
         raise PipelineError("E_LM2_FAILED", Stage.DOCUMENTING, repr(e)) from e
     data = out.model_dump(mode="json", exclude={"scratchpad"})
+    # Fallback: if LM2 returned no minutes but has summary, create a General Discussion topic
+    if not data.get("minutes") and data.get("summary"):
+        data["minutes"] = [{
+            "topic": "General Discussion",
+            "points": [s for s in data["summary"] if s.get("evidence_segment_ids")],
+        }]
     data["mode"] = mode
     ctx.write(ctx.output_name(Stage.DOCUMENTING), data)
 

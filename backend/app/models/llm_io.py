@@ -41,10 +41,10 @@ class LM1Output(BaseModel):
 
 
 class LM2Sentence(BaseModel):
-    """A summary/minutes sentence as LM2 returns it; uncited sentences are dropped by the verifier."""
+    """A summary/minutes sentence with required citations; the verifier drops uncited items."""
 
     text: str
-    evidence_segment_ids: list[str] = []
+    evidence_segment_ids: list[str] = Field(default_factory=list, min_length=1)
 
 
 class LM2Topic(BaseModel):

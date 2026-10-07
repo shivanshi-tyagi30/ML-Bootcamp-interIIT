@@ -71,9 +71,10 @@ async def build_vocabulary(ctx: "JobContext") -> None:
         parts = []
         for i, chunk in enumerate(chunks):
             await ctx.progress(i / len(chunks), f"Learning the meeting's vocabulary (part {i + 1} of {len(chunks)})")
+            vocab_max_tokens = 1536 if len(chunks) == 1 else 2048
             parts.append(await ctx.llm.json_call(
                 ctx.settings.LM1_MODEL, system, "TRANSCRIPT\n" + "\n".join(chunk), Vocabulary,
-                min(1, ctx.settings.LLM_MAX_RETRIES), max_tokens=2048, job_id=ctx.job_id,
+                min(1, ctx.settings.LLM_MAX_RETRIES), max_tokens=vocab_max_tokens, job_id=ctx.job_id,
             ))
         vocab = merge_vocabularies(parts, glossary)
     except Exception as e:  # noqa: BLE001 - this stage never fails the job

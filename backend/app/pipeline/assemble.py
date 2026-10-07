@@ -34,6 +34,27 @@ def speaker_for(word: dict[str, Any], turns: list[dict[str, Any]]) -> str | None
     return near if dist <= 0.5 else None
 
 
+PSEUDO_PAUSE_SEC = 1.5  # gap between words that suggests a speaker change
+MAX_PSEUDO_SPEAKERS = 6  # cap to avoid "Speaker 47" in long recordings
+
+
+def assign_pseudo_speakers(words: list[dict[str, Any]]) -> None:
+    """Assign pseudo-speaker labels based on pauses when diarization is unavailable.
+    
+    Uses significant pauses between words to guess speaker changes.
+    Labels cycle through Speaker 1..N. This is a rough heuristic.
+    """
+    if not words:
+        return
+    speaker_num = 1
+    words[0]["speaker"] = f"Speaker {speaker_num}"
+    for i in range(1, len(words)):
+        gap = words[i]["start"] - words[i - 1]["end"]
+        if gap > PSEUDO_PAUSE_SEC:
+            speaker_num = (speaker_num % MAX_PSEUDO_SPEAKERS) + 1
+        words[i]["speaker"] = f"Speaker {speaker_num}"
+
+
 def join_words(words: list[str]) -> str:
     """Join words with single spaces (Whisper words already carry their punctuation)."""
     return re.sub(r"\s+", " ", " ".join(w.strip() for w in words)).strip()
@@ -46,7 +67,12 @@ def assemble_segments(
     words = flatten_words(whisper_segments)
     for i, w in enumerate(words):
         w.update(word_updates.get(str(i), {}))
-        w["speaker"] = speaker_for(w, turns)
+        
+    if turns:
+        for w in words:
+            w["speaker"] = speaker_for(w, turns)
+    else:
+        assign_pseudo_speakers(words)
 
     groups: list[list[dict[str, Any]]] = []
     cur: list[dict[str, Any]] = []
