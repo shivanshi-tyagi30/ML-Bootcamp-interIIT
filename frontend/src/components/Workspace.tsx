@@ -27,9 +27,15 @@ interface Props {
 /** Plays a moment slightly early so the listener hears it in context. */
 const LEAD_IN_S = 2;
 
-export function Workspace({ api, jobId, record, audioUrl, error, theme, onTheme, onNew, onRetry }: Props) {
+export function Workspace({ api, jobId, record: initialRecord, audioUrl, error, theme, onTheme, onNew, onRetry }: Props) {
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
+  const [record, setRecord] = useState<PartialRecord>(initialRecord);
+
+  useEffect(() => {
+    setRecord(initialRecord);
+  }, [initialRecord]);
+
   const raw = record.raw_transcript ?? [];
   const audio = useAudio(audioUrl, record.meta.duration_s ?? raw.at(-1)?.end ?? 0);
   const [mode, setMode] = useState<TranscriptMode>(record.refinement ? "diff" : "raw");
@@ -38,6 +44,64 @@ export function Workspace({ api, jobId, record, audioUrl, error, theme, onTheme,
   const [scrollTo, setScrollTo] = useState<{ id: string; nonce: number } | null>(null);
 
   const segments = useMemo(() => new Map<string, Segment>(raw.map((s) => [s.id, s])), [raw]);
+
+  const handleStartEdit = useCallback(() => {
+    if (audio.playing) {
+      audio.pause();
+    }
+  }, [audio]);
+
+  const handleUpdateWord = useCallback((segmentId: string, wordIdx: number, newWord: string) => {
+    const trimmed = newWord.trim();
+    if (!trimmed) return;
+
+    setRecord((prev) => {
+      const updateSegList = (list?: Segment[]) => {
+        if (!list) return list;
+        return list.map((seg) => {
+          if (seg.id !== segmentId) return seg;
+
+          const words = seg.words ? seg.words.map((w) => ({ ...w })) : undefined;
+          let newText = seg.text;
+
+          if (words && words.length > 0 && wordIdx >= 0 && wordIdx < words.length) {
+            if (words[wordIdx].w === trimmed) return seg;
+            words[wordIdx].w = trimmed;
+
+            const textTokens = seg.text.split(/(\s+)/);
+            let wCount = 0;
+            const nextTokens = textTokens.map((tok) => {
+              if (/^\s+$/.test(tok)) return tok;
+              if (wCount++ === wordIdx) return trimmed;
+              return tok;
+            });
+            newText = nextTokens.join("");
+          } else {
+            const textTokens = seg.text.split(/(\s+)/);
+            let wCount = 0;
+            const nextTokens = textTokens.map((tok) => {
+              if (/^\s+$/.test(tok)) return tok;
+              if (wCount++ === wordIdx) return trimmed;
+              return tok;
+            });
+            newText = nextTokens.join("");
+          }
+
+          return {
+            ...seg,
+            text: newText,
+            words,
+          };
+        });
+      };
+
+      return {
+        ...prev,
+        raw_transcript: updateSegList(prev.raw_transcript),
+        refined_transcript: updateSegList(prev.refined_transcript),
+      };
+    });
+  }, []);
 
 
   const startOf = useCallback(
@@ -213,6 +277,8 @@ export function Workspace({ api, jobId, record, audioUrl, error, theme, onTheme,
           isPlaying={audio.playing}
           scrollTo={scrollTo}
           onSeek={(t) => audio.available && audio.playFrom(t)}
+          onUpdateWord={handleUpdateWord}
+          onStartEdit={handleStartEdit}
         />
         <RecordPane
           record={record}

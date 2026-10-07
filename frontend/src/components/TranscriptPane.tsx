@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { REJECT_REASONS, annotate, type Piece, type TranscriptMode } from "../lib/annotate";
 import { fmtTime } from "../lib/format";
 import type { Edit, RejectedEdit, Segment } from "../lib/types";
@@ -17,6 +17,8 @@ interface Props {
   isPlaying?: boolean;
   scrollTo: { id: string; nonce: number } | null;
   onSeek: (t: number) => void;
+  onUpdateWord?: (segmentId: string, wordIdx: number, newWord: string) => void;
+  onStartEdit?: () => void;
 }
 
 const pct = (c: number) => `${Math.round(c * 100)}%`;
@@ -87,6 +89,95 @@ function PieceView({ p, mode }: { p: Piece; mode: TranscriptMode }) {
   }
 }
 
+function EditableWord({
+  word,
+  wordIdx,
+  segId,
+  onSeek,
+  onSave,
+  onStartEdit,
+  children,
+  className,
+}: {
+  word: string;
+  wordIdx: number;
+  segId: string;
+  onSeek?: () => void;
+  onSave?: (segmentId: string, wordIdx: number, newWord: string) => void;
+  onStartEdit?: () => void;
+  children?: React.ReactNode;
+  className?: string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(word);
+
+  useEffect(() => {
+    setDraft(word);
+  }, [word]);
+
+  const commit = () => {
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== word) {
+      onSave?.(segId, wordIdx, trimmed);
+    } else {
+      setDraft(word);
+    }
+    setEditing(false);
+  };
+
+  const cancel = () => {
+    setDraft(word);
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <input
+        ref={(el) => {
+          if (el) {
+            el.focus();
+            el.select();
+          }
+        }}
+        type="text"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commit();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            cancel();
+          }
+        }}
+        onBlur={commit}
+        onClick={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+        style={{ width: `${Math.max(2, draft.length + 1.2)}ch` }}
+        className="inline-block text-[15px] font-semibold text-ink bg-surface border-2 border-accent rounded px-1.5 py-0 shadow-xs outline-none ring-2 ring-accent/30 z-30 relative -my-0.5 align-baseline text-accent-deep"
+      />
+    );
+  }
+
+  return (
+    <span
+      onClick={() => onSeek?.()}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        onStartEdit?.();
+        setDraft(word);
+        setEditing(true);
+      }}
+      title="Click to play · Double-click to edit"
+      className={className}
+    >
+      {children ?? word}
+    </span>
+  );
+}
+
 function SegmentContent({
   seg,
   pieces,
@@ -95,6 +186,8 @@ function SegmentContent({
   currentTime,
   isPlaying,
   onSeek,
+  onUpdateWord,
+  onStartEdit,
 }: {
   seg: Segment;
   pieces: Piece[];
@@ -103,14 +196,53 @@ function SegmentContent({
   currentTime: number;
   isPlaying: boolean;
   onSeek: (t: number) => void;
+  onUpdateWord?: (segmentId: string, wordIdx: number, newWord: string) => void;
+  onStartEdit?: () => void;
 }) {
   const words = seg.words;
   if (!words || !words.length) {
+    let wordCursor = 0;
     return (
       <p className="text-[15px] leading-relaxed">
-        {pieces.map((p, i) => (
-          <PieceView key={i} p={p} mode={mode} />
-        ))}
+        {pieces.map((p, pIdx) => {
+          if (p.kind === "text") {
+            const tokens = p.text.split(/(\s+)/);
+            return (
+              <span key={pIdx}>
+                {tokens.map((tok, tIdx) => {
+                  if (!tok) return null;
+                  if (/^\s+$/.test(tok)) return <span key={tIdx}>{tok}</span>;
+                  const wIdx = wordCursor++;
+                  return (
+                    <EditableWord
+                      key={tIdx}
+                      word={tok}
+                      wordIdx={wIdx}
+                      segId={seg.id}
+                      onSave={onUpdateWord}
+                      onStartEdit={onStartEdit}
+                      className="inline-block scale-100 cursor-pointer hover:text-accent-deep"
+                    />
+                  );
+                })}
+              </span>
+            );
+          }
+          const wIdx = wordCursor++;
+          return (
+            <EditableWord
+              key={pIdx}
+              word={p.kind === "disputed" ? p.text : p.kind === "accepted" ? p.edit.replacement : p.edit.original}
+              wordIdx={wIdx}
+              segId={seg.id}
+              onSave={onUpdateWord}
+              onStartEdit={onStartEdit}
+              className="inline-block scale-100 cursor-pointer"
+            >
+              <PieceView p={p} mode={mode} />
+            </EditableWord>
+          );
+        })}
       </p>
     );
   }
@@ -141,9 +273,14 @@ function SegmentContent({
                 const w = words[wIdx];
                 const isCurrent = wIdx === activeWordIdx;
                 return (
-                  <span
+                  <EditableWord
                     key={tIdx}
-                    onClick={() => w && onSeek(w.start)}
+                    word={tok}
+                    wordIdx={wIdx}
+                    segId={seg.id}
+                    onSeek={w ? () => onSeek(w.start) : undefined}
+                    onSave={onUpdateWord}
+                    onStartEdit={onStartEdit}
                     className={cx(
                       "inline-block transition-all duration-150 ease-out origin-bottom",
                       isCurrent
@@ -151,9 +288,7 @@ function SegmentContent({
                         : "scale-100",
                       w && "cursor-pointer hover:text-accent-deep",
                     )}
-                  >
-                    {tok}
-                  </span>
+                  />
                 );
               })}
             </span>
@@ -167,11 +302,17 @@ function SegmentContent({
 
         const isCurrent = activeWordIdx >= startWIdx && activeWordIdx < endWIdx;
         const pieceStart = words[startWIdx]?.start ?? seg.start;
+        const pieceWord = p.kind === "disputed" ? p.text : p.kind === "accepted" ? p.edit.replacement : p.edit.original;
 
         return (
-          <span
+          <EditableWord
             key={pIdx}
-            onClick={() => onSeek(pieceStart)}
+            word={pieceWord}
+            wordIdx={startWIdx}
+            segId={seg.id}
+            onSeek={() => onSeek(pieceStart)}
+            onSave={onUpdateWord}
+            onStartEdit={onStartEdit}
             className={cx(
               "inline-block transition-all duration-150 ease-out origin-bottom",
               isCurrent
@@ -181,7 +322,7 @@ function SegmentContent({
             )}
           >
             <PieceView p={p} mode={mode} />
-          </span>
+          </EditableWord>
         );
       })}
     </p>
@@ -196,6 +337,8 @@ const Row = memo(function Row({
   currentTime,
   isPlaying,
   onSeek,
+  onUpdateWord,
+  onStartEdit,
 }: {
   seg: Segment;
   pieces: Piece[];
@@ -204,6 +347,8 @@ const Row = memo(function Row({
   currentTime: number;
   isPlaying: boolean;
   onSeek: (t: number) => void;
+  onUpdateWord?: (segmentId: string, wordIdx: number, newWord: string) => void;
+  onStartEdit?: () => void;
 }) {
   return (
     <div
@@ -232,6 +377,8 @@ const Row = memo(function Row({
           currentTime={currentTime}
           isPlaying={isPlaying}
           onSeek={onSeek}
+          onUpdateWord={onUpdateWord}
+          onStartEdit={onStartEdit}
         />
       </div>
     </div>
@@ -250,6 +397,8 @@ export function TranscriptPane({
   isPlaying = false,
   scrollTo,
   onSeek,
+  onUpdateWord,
+  onStartEdit,
 }: Props) {
   const parent = useRef<HTMLDivElement>(null);
   const effectiveMode: TranscriptMode = hasRefinement ? mode : "raw";
@@ -306,7 +455,12 @@ export function TranscriptPane({
   return (
     <section className="flex min-h-0 flex-col max-md:h-[65vh]" aria-label="Transcript">
       <header className="flex items-center justify-between gap-3 border-b border-line px-4 py-2.5">
-        <h2 className="text-xs font-semibold tracking-wider text-ink-3 uppercase">Transcript</h2>
+        <div className="flex items-center gap-2">
+          <h2 className="text-xs font-semibold tracking-wider text-ink-3 uppercase">Transcript</h2>
+          <span className="hidden sm:inline-block rounded bg-raised px-1.5 py-0.5 text-[10.5px] text-ink-3">
+            Double-click word to edit
+          </span>
+        </div>
         <Tabs
           label="Transcript view"
           value={effectiveMode}
@@ -342,6 +496,8 @@ export function TranscriptPane({
                   currentTime={currentTime}
                   isPlaying={isPlaying}
                   onSeek={onSeek}
+                  onUpdateWord={onUpdateWord}
+                  onStartEdit={onStartEdit}
                 />
               </div>
             );
