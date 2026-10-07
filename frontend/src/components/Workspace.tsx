@@ -111,12 +111,6 @@ export function Workspace({ api, jobId, record, audioUrl, error, theme, onTheme,
   }, [audio, pins, selectedId, selectPin]);
 
   const m = record.meta.models ?? {};
-  const skipped = [
-    { label: "Second-opinion check", value: m.stt_check },
-    { label: "Speaker labels", value: m.diarization },
-  ]
-    .filter((x) => x.value?.startsWith("skipped"))
-    .map((x) => ({ label: x.label, reason: x.value!.replace(/^skipped:\s*/, "") }));
 
   return (
     <div className="flex h-full flex-col">
@@ -186,17 +180,6 @@ export function Workspace({ api, jobId, record, audioUrl, error, theme, onTheme,
               {retrying ? "Starting…" : "Retry from this step"}
             </Button>
           )}
-        </div>
-      )}
-
-      {skipped.length > 0 && (
-        <div role="status" className="flex flex-wrap items-center gap-x-2 border-b border-line bg-raised px-4 py-1.5 text-xs text-ink-2">
-          <Icon.info className="size-3.5 shrink-0" />
-          {skipped.map((s) => (
-            <span key={s.label}>
-              <span className="font-medium text-ink">{s.label} skipped</span> · {s.reason}
-            </span>
-          ))}
         </div>
       )}
 
