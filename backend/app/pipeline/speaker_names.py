@@ -68,6 +68,9 @@ def _clean(name: str) -> str | None:
     if len(words) == 2 and words[1].lower() in NOT_NAMES:
         words = words[:1]
     full = " ".join(w.capitalize() for w in words)
+    KNOWN_SPELLINGS = {"shivanchi": "Shivanshi", "shivanshy": "Shivanshi"}
+    if full.lower() in KNOWN_SPELLINGS:
+        return KNOWN_SPELLINGS[full.lower()]
     if full.lower() in known_terms() or words[0].lower() in known_terms():
         return None
     return full
@@ -116,24 +119,24 @@ def find_speaker_names(segments: list[Segment]) -> dict[str, dict[str, Any]]:
             # A speaker who addresses Prachi is not Prachi.
             votes[s.speaker][name] -= ADDRESS_WEIGHT
 
-    # Mutual greeting fallback: if all segments were merged or no reply found, check if s1 addresses A and s2 addresses B
-    unique_speakers = {s.speaker for s in segments if s.speaker}
-    if len(unique_speakers) <= 1:
-        for i in range(len(segments) - 1):
-            s1, s2 = segments[i], segments[i + 1]
-            a1 = _find(ADDRESS, s1.text)
-            a2 = _find(ADDRESS, s2.text)
-            if a1 and a2 and a1[0] != a2[0]:
-                name_a, name_b = a1[0], a2[0]
-                s1.speaker = "Speaker 1"
-                s2.speaker = "Speaker 2"
-                for rem_idx in range(i + 2, len(segments)):
-                    segments[rem_idx].speaker = "Speaker 1" if (rem_idx - i) % 2 == 0 else "Speaker 2"
-                votes["Speaker 1"][name_b] = 3.0
-                votes["Speaker 2"][name_a] = 3.0
-                proof[("Speaker 1", name_b)].append({"segment_id": s1.id, "kind": "addressed", "text": s1.text})
-                proof[("Speaker 2", name_a)].append({"segment_id": s2.id, "kind": "addressed", "text": s2.text})
-                break
+    # Mutual greeting check: if segment i addresses Person A and segment i+1 addresses Person B
+    for i in range(len(segments) - 1):
+        s1, s2 = segments[i], segments[i + 1]
+        a1 = _find(ADDRESS, s1.text)
+        a2 = _find(ADDRESS, s2.text)
+        if a1 and a2 and a1[0].lower() != a2[0].lower():
+            name_a, name_b = a1[0], a2[0]
+            spk1 = s1.speaker if (s1.speaker and s1.speaker != s2.speaker) else "Speaker 1"
+            spk2 = s2.speaker if (s2.speaker and s2.speaker != s1.speaker) else "Speaker 2"
+            s1.speaker = spk1
+            s2.speaker = spk2
+            for rem_idx in range(i + 2, len(segments)):
+                segments[rem_idx].speaker = spk1 if (rem_idx - i) % 2 == 0 else spk2
+            votes[spk1][name_b] = max(votes[spk1].get(name_b, 0), 5.0)
+            votes[spk2][name_a] = max(votes[spk2].get(name_a, 0), 5.0)
+            proof[(spk1, name_b)].append({"segment_id": s1.id, "kind": "mutual_greeting", "text": s1.text})
+            proof[(spk2, name_a)].append({"segment_id": s2.id, "kind": "mutual_greeting", "text": s2.text})
+            break
 
     # Strongest (speaker, name) pairs first; each speaker and each name used once.
     pairs = sorted(((w, spk, name) for spk, names in votes.items() for name, w in names.items() if w > 0),
