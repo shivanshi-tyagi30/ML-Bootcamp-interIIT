@@ -30,6 +30,8 @@ class AppState:
     runner: Runner
     active_uploads: int = 0
     tasks: dict[str, asyncio.Task[Any]] = field(default_factory=dict)
+    ready: bool = False  # every model loaded (set once startup warm-up finishes)
+    not_loaded: list[str] = field(default_factory=list)  # models the warm-up could not load
 
     def schedule(self, job_id: str) -> None:
         """Start a job in the background, keeping a reference so it isn't garbage-collected."""

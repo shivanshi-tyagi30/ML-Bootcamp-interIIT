@@ -49,7 +49,7 @@ def fixtures_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
     """Settings with data in a temp folder and optional models off."""
-    return Settings(DATA_DIR=tmp_path / "data", RECHECK_ENABLED=False, DIARIZATION_ENABLED=False)
+    return Settings(DATA_DIR=tmp_path / "data", RECHECK_ENABLED=False, DIARIZATION_ENABLED=False, WARMUP_ON_START=False)
 
 
 def seg(id_: str, start: float, text: str, speaker: str | None = None, disputed: dict[str, str] | None = None) -> Segment:

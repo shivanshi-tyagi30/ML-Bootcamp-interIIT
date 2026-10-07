@@ -94,12 +94,14 @@ async def document(ctx: "JobContext") -> None:
         await ctx.progress(0.5, f"Writing the meeting record: {msg}")
 
     n_segments = len(refined)
-    lm2_max_tokens = 4096 if n_segments <= 50 and not s.LM2_SCRATCHPAD else 8192
+    # Without the scratchpad a short meeting's record fits in 4096 tokens; a smaller cap also means a smaller
+    # num_ctx, which Ollama allocates and processes faster.
+    lm2_max_tokens = 4096 if n_segments <= 150 and not s.LM2_SCRATCHPAD else 8192
     call = lambda user, schema=record_schema, mt=lm2_max_tokens: ctx.llm.json_call(  # noqa: E731
         s.LM2_MODEL, system, user, schema, s.LLM_MAX_RETRIES, max_tokens=mt, job_id=ctx.job_id,
         on_retry=on_retry,
     )
-    if s.LM1_MODEL != s.LM2_MODEL and hasattr(ctx.llm, "unload"):
+    if s.LM1_UNLOAD_BEFORE_LM2 and s.LM1_MODEL != s.LM2_MODEL and hasattr(ctx.llm, "unload"):
         await ctx.llm.unload(s.LM1_MODEL)  # LM1 is done; don't keep both models in RAM
     try:
         budget = s.LM2_MAX_INPUT_TOKENS - estimate_tokens(system) - 2000

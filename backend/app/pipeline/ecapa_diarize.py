@@ -9,7 +9,7 @@ How it works:
 4. Clusters with very little speech are merged into their nearest neighbour, so noise does not
    become "Speaker 5".
 
-No Hugging Face token is needed; the model (~80 MB) downloads once.
+No Hugging Face token is needed; `python -m app.prefetch` downloads the model (~80 MB) at deploy time.
 """
 
 from __future__ import annotations
