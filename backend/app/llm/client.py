@@ -120,6 +120,17 @@ class LLMClient:
         data = r.json()
         return data.get("message", {}).get("content", ""), data.get("prompt_eval_count")
 
+    async def unload(self, model: str) -> None:
+        """Ask Ollama to free a model's memory now (best effort; frees RAM for the next model on a laptop)."""
+        if self.backend != "ollama":
+            return
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                await client.post(f"{self._url(model).removesuffix('/v1')}/api/generate",
+                                  json={"model": model, "keep_alive": 0})
+        except Exception:  # noqa: BLE001
+            log.info("could not unload %s", model)
+
     async def _vllm(self, model: str, messages: list[dict[str, str]], schema: type[BaseModel],
                     max_tokens: int) -> tuple[str, int | None]:
         """One call to an OpenAI-compatible server with vLLM guided JSON."""

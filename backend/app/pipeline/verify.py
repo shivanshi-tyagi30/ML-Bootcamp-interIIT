@@ -29,6 +29,7 @@ AGREEMENT_CUE = re.compile(
 )
 INTRO = r"\b(?:this is|i am|i'm|my name is|it's)\s+"
 DEADLINE_ADJACENCY = 2
+NEIGHBOUR_SEGMENTS = 1  # summary/minutes may borrow a fact from the line just before or after a cited one
 
 
 @dataclass
@@ -119,17 +120,18 @@ def verify(
             return None
         missing = unsupported_facts(s.text, cited_text(ids))
         if missing:
-            # Check if missing names or numbers exist in other segments of the transcript
-            added = False
-            for m in list(missing):
-                m_low = m.lower()
-                for other_id, other_seg in seg.items():
-                    if other_id not in ids and re.search(r"(?<!\w)" + re.escape(m_low) + r"(?!\w)", other_seg.text.lower()):
-                        ids.append(other_id)
-                        added = True
-                        break
-            if added:
-                missing = unsupported_facts(s.text, cited_text(ids))
+            # A name or number may sit in the line right next to a cited one (e.g. "Priya: ..." then the
+            # point itself). Only those neighbours may be added; a match anywhere else is not evidence.
+            near = sorted({refined[j].id for i in ids for j in range(order[i] - NEIGHBOUR_SEGMENTS,
+                           order[i] + NEIGHBOUR_SEGMENTS + 1) if 0 <= j < len(refined)} - set(ids),
+                          key=order.get)
+            for m in missing:
+                hit = next((n for n in near if re.search(r"(?<!\w)" + re.escape(m.lower()) + r"(?!\w)",
+                                                         seg[n].text.lower())), None)
+                if hit and hit not in ids:
+                    ids.append(hit)
+            ids.sort(key=order.get)
+            missing = unsupported_facts(s.text, cited_text(ids))
         if missing:
             stats.sentences_removed += 1
             return None

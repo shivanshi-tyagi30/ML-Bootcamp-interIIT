@@ -15,6 +15,7 @@ numpy>=1.26
 nemo_toolkit[asr]>=2.0        # Parakeet (optional; app must run without it)
 pyannote.audio>=3.3           # optional; app must run without it
 speechbrain>=1.0.0            # ECAPA-TDNN speaker identification
+scikit-learn>=1.3             # clustering of ECAPA voice embeddings
 openai>=1.40                  # OpenAI-compatible client for vLLM / Ollama
 jellyfish>=1.0
 rapidfuzz>=3.9

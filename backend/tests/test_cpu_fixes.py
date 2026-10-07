@@ -175,3 +175,66 @@ def test_pipeline_without_scratchpad(settings, fixtures_dir):
     row = asyncio.run(go())
     assert row["status"] == "completed", row
     assert "LM2Record" in llm.calls and row["n_tasks"] == 2
+
+
+def test_unload_posts_keep_alive_zero(monkeypatch):
+    import json
+
+    import httpx
+
+    from app.llm.client import LLMClient
+
+    seen = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append((req.url.path, json.loads(req.content)))
+        return httpx.Response(200, json={})
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    asyncio.run(LLMClient("http://localhost:11434/v1", "ollama", 30).unload("qwen3:8b"))
+    assert seen == [("/api/generate", {"model": "qwen3:8b", "keep_alive": 0})]
+
+
+def test_no_guessed_speakers_without_diarization():
+    from app.pipeline.assemble import assemble_segments
+
+    segs = [{"words": [{"w": "Is it done?", "start": 0.0, "end": 0.5, "conf": 0.9},
+                       {"w": "Yes.", "start": 3.0, "end": 3.5, "conf": 0.9}]}]
+    assert all(s.speaker is None for s in assemble_segments(segs, {}, []))
+
+
+def test_place_name_spelling_is_corrected_but_people_names_are_not():
+    from app.config import Settings
+    from app.models.record import Edit
+    from app.pipeline.guard import check_edit
+    from tests.conftest import seg
+
+    s = Settings()
+    edit = lambda o, r, cat="proper_noun": Edit(  # noqa: E731
+        segment_id="S001", original=o, replacement=r, category=cat, rationale="", confidence=0.9)
+    sg = seg("S001", 0, "We met at IIT Guhati with Priya last week.")
+    assert check_edit(edit("Guhati", "Guwahati"), sg, set(), s) is None
+    assert check_edit(edit("Guhati", "Guwahati", "homophone"), sg, set(), s) is None
+    assert check_edit(edit("Priya", "Pria"), sg, set(), s) == "name_changed"
+    sg2 = seg("S001", 0, "The demo uses Lang Chain for retrieval.")
+    assert check_edit(edit("Lang Chain", "LangChain", "product"), sg2, {"langchain"}, s) is None
+
+
+def test_verifier_borrows_only_from_neighbouring_lines(settings):
+    from app.models.llm_io import LM2Output
+    from app.models.record import Meta, Refinement
+    from app.pipeline.verify import verify
+    from tests.conftest import sample_segments
+
+    segs = sample_segments()
+    lm2 = LM2Output(summary=[
+        # "Priya" is in S001, right before the cited S002: kept, with S001 added as evidence.
+        {"text": "The kernels wait on the pipeline, said Priya.", "evidence_segment_ids": ["S002"]},
+        # "Priya" is only in S001, far from S008: removed.
+        {"text": "The test data needs cleaning, said Priya.", "evidence_segment_ids": ["S008"]},
+    ])
+    meta = Meta(job_id="x", title="t", source_file="f", duration_s=1, language="en", language_probability=1,
+                models={}, generated_at="2026-01-01T00:00:00Z")
+    rec = verify(lm2, segs, segs, Refinement(), meta, settings, diarization_on=False)
+    assert [(s.text[:11], s.evidence_segment_ids) for s in rec.summary] == [("The kernels", ["S001", "S002"])]

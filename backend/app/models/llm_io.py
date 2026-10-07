@@ -41,10 +41,14 @@ class LM1Output(BaseModel):
 
 
 class LM2Sentence(BaseModel):
-    """A summary/minutes sentence with required citations; the verifier drops uncited items."""
+    """A summary/minutes sentence as LM2 returns it; uncited sentences are dropped by the verifier.
+
+    Lenient on purpose: a strict min_length would fail the whole answer (and re-generate it) for one
+    uncited sentence.
+    """
 
     text: str
-    evidence_segment_ids: list[str] = Field(default_factory=list, min_length=1)
+    evidence_segment_ids: list[str] = []
 
 
 class LM2Topic(BaseModel):

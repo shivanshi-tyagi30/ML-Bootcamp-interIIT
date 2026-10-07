@@ -8,6 +8,7 @@ import threading
 from typing import TYPE_CHECKING, Any, Protocol
 
 from app.config import Settings
+from app.core.errors import JobCancelled
 from app.core.stages import Stage
 from app.pipeline.recheck import flatten_words
 
@@ -96,49 +97,34 @@ class PyannoteDiarizer:
 
 
 class EcapaDiarizer:
-    """SpeechBrain ECAPA-TDNN speaker identification, loaded on first use."""
+    """ECAPA-TDNN voice embeddings clustered per meeting (no Hugging Face token needed)."""
 
-    def __init__(self, model_source: str = DEFAULT_ECAPA_MODEL) -> None:
-        """Initialize the ECAPA-TDNN diarizer."""
+    def __init__(self, settings: Settings) -> None:
+        """Import speechbrain and scikit-learn now (raises ImportError if missing); load the model lazily."""
+        import sklearn  # noqa: F401
+        import speechbrain  # noqa: F401
+
         from app.pipeline.ecapa_diarize import get_ecapa_identifier
 
-        self.name = model_source
-        self.identifier = get_ecapa_identifier(model_source=model_source)
+        self.settings = settings
+        self.name = f"ECAPA-TDNN ({settings.ECAPA_MODEL})"
+        self.identifier = get_ecapa_identifier(settings.ECAPA_MODEL, settings.DATA_DIR / "models" / "ecapa")
 
     @property
     def loaded(self) -> bool:
-        """Whether the model is already in memory."""
+        """Whether the model is in memory."""
         return self.identifier.loaded
 
-    def run(self, path: str, whisper_segments: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
-        """Extract speaker turns by clustering embeddings for speech bursts in the audio."""
-        if not whisper_segments:
-            return []
+    def run(self, path: str, whisper_segments: list[dict[str, Any]] | None = None,
+            should_stop: Any = None) -> list[dict[str, Any]]:
+        """Turns [{start, end, label}] from Whisper's speech bursts."""
+        from app.pipeline.ecapa_diarize import make_bursts
 
-        words = flatten_words(whisper_segments)
-        if not words:
-            return []
-
-        bursts: list[list[dict[str, Any]]] = []
-        cur_burst: list[dict[str, Any]] = [words[0]]
-        for i in range(1, len(words)):
-            gap = words[i]["start"] - words[i - 1]["end"]
-            if gap >= 0.42:  # natural conversational turn boundary
-                bursts.append(cur_burst)
-                cur_burst = []
-            cur_burst.append(words[i])
-        if cur_burst:
-            bursts.append(cur_burst)
-
-        speaker_labels = self.identifier.identify_speakers(path, bursts)
-        turns = []
-        for b, spk in zip(bursts, speaker_labels):
-            turns.append({
-                "start": round(float(b[0]["start"]), 3),
-                "end": round(float(b[-1]["end"]), 3),
-                "label": spk,
-            })
-        return turns
+        bursts = make_bursts(flatten_words(whisper_segments or []))
+        labels = self.identifier.label_bursts(
+            path, bursts, self.settings.ECAPA_DISTANCE_THRESHOLD, self.settings.DIARIZATION_NUM_SPEAKERS, should_stop,
+        )
+        return [{"start": round(a, 3), "end": round(b, 3), "label": str(k)} for (a, b), k in zip(bursts, labels)]
 
 
 _default_pyannote: PyannoteDiarizer | None = None
@@ -159,7 +145,7 @@ def default_ecapa_diarizer(settings: Settings) -> EcapaDiarizer:
     """Process-wide ECAPA-TDNN diarizer singleton."""
     global _default_ecapa, _default
     if _default_ecapa is None:
-        _default_ecapa = EcapaDiarizer(getattr(settings, "ECAPA_MODEL", DEFAULT_ECAPA_MODEL))
+        _default_ecapa = EcapaDiarizer(settings)
         _default = _default_ecapa
     return _default_ecapa
 
@@ -222,12 +208,17 @@ async def diarize(ctx: "JobContext") -> None:
         whisper_segments = whisper_data.get("segments", [])
         ecapa = default_ecapa_diarizer(s)
         if not getattr(ecapa, "loaded", True):
-            await ctx.progress(0.0, "Loading ECAPA-TDNN speaker model (first run downloads it)")
-        raw_turns = await asyncio.to_thread(ecapa.run, str(ctx.wav_path), whisper_segments)
+            await ctx.progress(0.0, "Loading the speaker model (the first run downloads about 80 MB)")
+        else:
+            await ctx.progress(0.0, "Telling speakers apart")
+        raw_turns = await asyncio.to_thread(ecapa.run, str(ctx.wav_path), whisper_segments, ctx.cancel_requested)
         turns = relabel(raw_turns)
         ctx.write(out_name, {"skipped": False, "model": ecapa.name, "turns": turns})
-    except ImportError:
-        ctx.write(out_name, {"skipped": True, "reason": "speechbrain is not installed", "turns": []})
+    except ImportError as e:
+        ctx.write(out_name, {"skipped": True, "turns": [],
+                             "reason": f"{e.name or 'speechbrain'} is not installed (pip install speechbrain scikit-learn)"})
+    except JobCancelled:
+        raise
     except Exception as e:  # noqa: BLE001 - this stage never fails the job
         ctx.log.warning("ECAPA-TDNN diarization skipped: %r", e)
         ctx.write(out_name, {"skipped": True, "reason": friendly_reason(e), "turns": []})

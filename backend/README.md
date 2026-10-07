@@ -60,8 +60,15 @@ vllm serve google/gemma-3-27b-it --port 8002
 
 Diarization uses SpeechBrain's **ECAPA-TDNN** (`speechbrain/spkrec-ecapa-voxceleb`) by default without requiring
 gated tokens or accounts. It extracts 192-d speaker embeddings from speech bursts and groups them using
-Agglomerative Clustering with cosine distance. Alternatively, Pyannote can be enabled with `DIARIZATION_BACKEND=pyannote`
-and an `HF_TOKEN`. Without Parakeet, Whisper words below `LOWCONF_DISPUTE_THRESHOLD` are marked disputed.
+Agglomerative Clustering with cosine distance. Bursts under 1 s ("Yes.", "Agreed.") never start a speaker of
+their own; they join the closest voice. Speakers with under 3 s of speech are merged into the nearest one. If you
+know how many people spoke, set `DIARIZATION_NUM_SPEAKERS` (most accurate); otherwise tune
+`ECAPA_DISTANCE_THRESHOLD` (higher = fewer speakers). Needs `speechbrain` and `scikit-learn`; the model (~80 MB)
+downloads once into `data/models/ecapa`. If diarization is off or unavailable, speakers are left empty, never
+guessed. Alternatively, Pyannote can be enabled with `DIARIZATION_BACKEND=pyannote` and an `HF_TOKEN`.
+
+Place and institution names are corrected to their standard spelling ("Guhati" -> "Guwahati") when the new spelling
+is in the meeting vocabulary, the user's expected terms, or `app/data/places.txt`; people's names stay as heard. Without Parakeet, Whisper words below `LOWCONF_DISPUTE_THRESHOLD` are marked disputed.
 
 ### Windows laptop, CPU only
 
