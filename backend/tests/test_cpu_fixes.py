@@ -175,3 +175,31 @@ def test_pipeline_without_scratchpad(settings, fixtures_dir):
     row = asyncio.run(go())
     assert row["status"] == "completed", row
     assert "LM2Record" in llm.calls and row["n_tasks"] == 2
+
+
+def test_unload_posts_keep_alive_zero(monkeypatch):
+    import json
+
+    import httpx
+
+    from app.llm.client import LLMClient
+
+    seen = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append((req.url.path, json.loads(req.content)))
+        return httpx.Response(200, json={})
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    asyncio.run(LLMClient("http://localhost:11434/v1", "ollama", 30).unload("qwen3:8b"))
+    assert seen == [("/api/generate", {"model": "qwen3:8b", "keep_alive": 0})]
+
+
+def test_no_pseudo_speakers_without_diarization():
+    from app.pipeline.assemble import assemble_segments
+
+    segs = [{"words": [{"w": "Hello.", "start": 0.0, "end": 0.5, "conf": 0.9},
+                       {"w": "Again.", "start": 3.0, "end": 3.5, "conf": 0.9}]}]
+    out = assemble_segments(segs, {}, [])
+    assert all(s.speaker is None for s in out)

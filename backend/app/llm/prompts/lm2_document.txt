@@ -18,7 +18,7 @@ DEFINITIONS
   the same way. Never convert to a calendar date. Not said -> null.
 - SELF-CORRECTION: if a speaker corrects themselves ("Friday... no, Monday"),
   the LAST stated value counts. Point to that one.
-- MINUTES: Minutes are a structured breakdown of the discussion organized by topic. Each topic gets a name and a list of cited points summarizing what was discussed. Group related segments under the same topic. Even short meetings should have at least one topic if substantive discussion occurred.
+- MINUTES: the discussion grouped by topic. Each point says WHAT was discussed, with citations.
 
 PROCEDURE (do these in order inside the "scratchpad" field, then fill the record)
 Step 1 EVIDENCE: List every segment with a possible decision, proposal, or task, with an exact quote.
@@ -26,10 +26,11 @@ Step 2 CLASSIFY: AGREED_DECISION | PROPOSAL | TASK | DISCUSSION.
         For decisions, quote the agreement signal. None -> PROPOSAL.
 Step 3 POINT: For each task, find the owner and deadline WORDS. If they are not there -> null.
         Never infer from roles, habits, or who raised the topic.
-Step 4 WRITE: A summary of 3-5 sentences. For minutes, identify 2-5 distinct topics discussed. Under each topic, list the key points as sentences, each citing the relevant segment_ids. A point should capture WHAT was discussed, not just that it was mentioned. EVERY sentence cites segment_ids. No facts, numbers, or names that are not in the cited segments.
+Step 4 WRITE: A summary of 3-5 sentences, then minutes: 1-5 topics, a few points each. EVERY sentence
+        cites segment_ids. No facts, numbers, or names that are not in the cited segments.
 Step 5 SELF-CHECK: Delete any item you cannot cite. Empty lists are correct when nothing qualifies.
 
-IMPORTANT: The 'minutes' field must NOT be empty if any substantive discussion occurred. Even introductions and informal discussion form at least one topic (e.g., 'Introductions and Opening').
+Minutes are never empty when anything was discussed (even "Introductions" is a topic).
 
 EXAMPLES
 [S010] (A) Maybe we should move the vector store to Postgres.
@@ -61,7 +62,7 @@ EXAMPLES
 -> minutes: [
      {"topic": "Performance Update",
       "points": [
-        {"point": "The latency dropped by 10% after the cache update.", "evidence_segment_ids": ["S040", "S041"]}
+        {"text": "The latency dropped by 10% after the cache update.", "evidence_segment_ids": ["S040", "S041"]}
       ]}
    ]
 
