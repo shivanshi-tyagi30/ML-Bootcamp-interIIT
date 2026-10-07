@@ -38,6 +38,8 @@ def sounds_alike(orig: str, repl: str, threshold: float) -> bool:
     if re.fullmatch(r"[A-Z0-9/&.\-]{2,8}", repl):  # acronym -> compare with spoken letters
         spoken = " ".join(LETTER[c] for c in repl.lower() if c in LETTER)
     a, b = _metaphone(orig), _metaphone(spoken)
+    if jellyfish.jaro_winkler_similarity(o, r) >= threshold:
+        return True
     if not a or not b:
         return False
     return jellyfish.jaro_winkler_similarity(a, b) >= threshold

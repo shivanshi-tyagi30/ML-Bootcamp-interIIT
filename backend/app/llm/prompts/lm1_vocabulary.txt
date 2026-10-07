@@ -10,6 +10,7 @@ TASK
 
 RULES
 - Only include terms supported by the transcript. Do not add terms that are not discussed.
+- Pay special attention to regional place names, Indian cities and institutions (e.g. Thiruvananthapuram, Kozhikode, Bengaluru, Goa, Pune, IIT Guwahati), technical tools and Python libraries (e.g. NumPy, SciPy, Scikit-learn, TensorFlow, PyTorch, Jupyter), and domain acronyms that speech recognition mishears into garbled English words (e.g. term "Thiruvananthapuram", heard_as ["Thiravundapuram"]; term "Kozhikode", heard_as ["Kozy Ford"]; term "Goa", heard_as ["Goati"]).
 - Do NOT include people's names, numbers or dates.
 - "heard_as" must contain exact substrings from the transcript (may be empty if always correct).
 - Maximum 60 terms.

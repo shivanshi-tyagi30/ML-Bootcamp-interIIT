@@ -116,6 +116,25 @@ def find_speaker_names(segments: list[Segment]) -> dict[str, dict[str, Any]]:
             # A speaker who addresses Prachi is not Prachi.
             votes[s.speaker][name] -= ADDRESS_WEIGHT
 
+    # Mutual greeting fallback: if all segments were merged or no reply found, check if s1 addresses A and s2 addresses B
+    unique_speakers = {s.speaker for s in segments if s.speaker}
+    if len(unique_speakers) <= 1:
+        for i in range(len(segments) - 1):
+            s1, s2 = segments[i], segments[i + 1]
+            a1 = _find(ADDRESS, s1.text)
+            a2 = _find(ADDRESS, s2.text)
+            if a1 and a2 and a1[0] != a2[0]:
+                name_a, name_b = a1[0], a2[0]
+                s1.speaker = "Speaker 1"
+                s2.speaker = "Speaker 2"
+                for rem_idx in range(i + 2, len(segments)):
+                    segments[rem_idx].speaker = "Speaker 1" if (rem_idx - i) % 2 == 0 else "Speaker 2"
+                votes["Speaker 1"][name_b] = 3.0
+                votes["Speaker 2"][name_a] = 3.0
+                proof[("Speaker 1", name_b)].append({"segment_id": s1.id, "kind": "addressed", "text": s1.text})
+                proof[("Speaker 2", name_a)].append({"segment_id": s2.id, "kind": "addressed", "text": s2.text})
+                break
+
     # Strongest (speaker, name) pairs first; each speaker and each name used once.
     pairs = sorted(((w, spk, name) for spk, names in votes.items() for name, w in names.items() if w > 0),
                    key=lambda x: -x[0])

@@ -24,10 +24,10 @@ import numpy as np
 log = logging.getLogger(__name__)
 
 DEFAULT_ECAPA_MODEL = "speechbrain/spkrec-ecapa-voxceleb"
-DEFAULT_DISTANCE_THRESHOLD = 0.6  # cosine distance; same voice is usually < 0.5 on 2-3 s clips
+DEFAULT_DISTANCE_THRESHOLD = 0.48  # cosine distance; same voice is usually < 0.42 on 2-3 s clips
 BURST_GAP_SEC = 0.42  # a pause this long may be a turn change
 MAX_BURST_SEC = 8.0  # long monologues are cut so a quick reply without a pause can still be seen
-MIN_CLUSTER_SEC = 1.0  # shorter bursts never create a speaker on their own
+MIN_CLUSTER_SEC = 0.6  # shorter bursts join nearest cluster afterwards
 MIN_SPEAKER_SEC = 3.0  # clusters with less speech than this are merged into the nearest one
 MIN_EMBED_SEC = 0.4  # ECAPA needs a little audio; shorter clips are repeated to this length
 
@@ -96,7 +96,8 @@ def cluster_bursts(
                 break
             speech = {c: float(dur[anchors[anchor_labels == c]].sum()) for c in cents}
             small = min(speech, key=speech.get)
-            if speech[small] >= min_speaker_sec:
+            eff_min = min(min_speaker_sec, max(0.5, float(dur.sum()) * 0.08))
+            if speech[small] >= eff_min:
                 break
             others = [c for c in cents if c != small]
             target = max(others, key=lambda c: float(cents[small] @ cents[c]))
