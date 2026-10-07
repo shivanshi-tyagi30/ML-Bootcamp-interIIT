@@ -37,7 +37,6 @@ function Promise_({ label, value }: { label: string; value: string }) {
 
 export function UploadScreen({ error, busy, mock, theme, onTheme, api, onStart, onOpenJob, onSample, onClearError }: Props) {
   const [file, setFile] = useState<File | null>(null);
-  const [title, setTitle] = useState("");
   const [glossary, setGlossary] = useState("");
   const [drag, setDrag] = useState(false);
   const [localError, setLocalError] = useState<JobError | null>(null);
@@ -144,21 +143,7 @@ export function UploadScreen({ error, busy, mock, theme, onTheme, api, onStart, 
               </span>
             </label>
 
-            <div className="mx-3 mb-3 grid gap-3 sm:grid-cols-2">
-              <div>
-              <label htmlFor="title" className="font-mono text-[10.5px] tracking-[0.14em] text-ink-3">
-                MEETING NAME · OPTIONAL
-              </label>
-              <input
-                id="title"
-                value={title}
-                maxLength={100}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder={file ? file.name : "e.g. Sprint planning, week 41"}
-                className="mt-1 h-9 w-full border-b border-line bg-transparent text-[14px] placeholder:text-ink-3/80 focus:border-ink focus:outline-none"
-              />
-              </div>
-              <div>
+            <div className="mx-3 mb-3">
               <label htmlFor="glossary" className="font-mono text-[10.5px] tracking-[0.14em] text-ink-3">
                 EXPECTED TERMS · OPTIONAL
               </label>
@@ -169,7 +154,6 @@ export function UploadScreen({ error, busy, mock, theme, onTheme, api, onStart, 
                 placeholder="e.g. Priya, Kubernetes, RAG"
                 className="mt-1 h-9 w-full border-b border-line bg-transparent text-[14px] placeholder:text-ink-3/80 focus:border-ink focus:outline-none"
               />
-              </div>
             </div>
 
             <div className="flex items-center justify-between gap-3 border-t border-ink px-3 py-3">
@@ -183,7 +167,7 @@ export function UploadScreen({ error, busy, mock, theme, onTheme, api, onStart, 
               <button
                 disabled={!!localError || busy}
                 // With no file yet, the button opens the file picker instead.
-                onClick={() => (file ? onStart(file, { title, glossary }) : input.current?.click())}
+                onClick={() => (file ? onStart(file, { title: "", glossary }) : input.current?.click())}
                 className="inline-flex h-10 items-center gap-2 bg-accent px-5 text-[14px] font-bold text-accent-ink transition hover:bg-ink hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {busy ? "Uploading…" : file ? "Start processing" : "Choose a recording"}
