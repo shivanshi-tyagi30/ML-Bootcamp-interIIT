@@ -121,12 +121,15 @@ async def document(ctx: "JobContext") -> None:
     except Exception as e:  # noqa: BLE001 - connection errors etc.
         raise PipelineError("E_LM2_FAILED", Stage.DOCUMENTING, repr(e)) from e
     data = out.model_dump(mode="json", exclude={"scratchpad"})
-    # Fallback: if LM2 returned no minutes but has summary, create a General Discussion topic
+    # Fallback: cross-populate if one of minutes or summary is empty
     if not data.get("minutes") and data.get("summary"):
         data["minutes"] = [{
             "topic": "General Discussion",
             "points": [s for s in data["summary"] if s.get("evidence_segment_ids")],
         }]
+    elif not data.get("summary") and data.get("minutes"):
+        all_pts = [p for t in data["minutes"] for p in t.get("points", []) if p.get("evidence_segment_ids")]
+        data["summary"] = all_pts[:5]
     data["mode"] = mode
     ctx.write(ctx.output_name(Stage.DOCUMENTING), data)
 

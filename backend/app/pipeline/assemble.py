@@ -34,25 +34,73 @@ def speaker_for(word: dict[str, Any], turns: list[dict[str, Any]]) -> str | None
     return near if dist <= 0.5 else None
 
 
-PSEUDO_PAUSE_SEC = 1.5  # gap between words that suggests a speaker change
-MAX_PSEUDO_SPEAKERS = 6  # cap to avoid "Speaker 47" in long recordings
+PSEUDO_PAUSE_SEC = 0.42  # natural turn pause in conversation (~0.4s)
+MAX_PSEUDO_SPEAKERS = 3   # default typical meeting group size to rotate returning speakers
+
+
+def detect_self_intro(text: str) -> str | None:
+    """Detect name in self-introduction like 'I am Shivanshi', 'This is Prachi'."""
+    m = re.search(r"\b(?:i am|i'm|my name is|this is)\s+([A-Z][a-z]+)\b", text, re.I)
+    return m.group(1).capitalize() if m else None
 
 
 def assign_pseudo_speakers(words: list[dict[str, Any]]) -> None:
-    """Assign pseudo-speaker labels based on pauses when diarization is unavailable.
+    """Assign pseudo-speaker labels based on pauses and conversational turn-taking.
     
-    Uses significant pauses between words to guess speaker changes.
-    Labels cycle through Speaker 1..N. This is a rough heuristic.
+    Identifies turn boundaries (>0.4s pause), assigns distinct speakers, and re-identifies
+    returning speakers rather than treating every turn as a new speaker.
     """
     if not words:
         return
-    speaker_num = 1
-    words[0]["speaker"] = f"Speaker {speaker_num}"
+
+    # First pass: identify word clusters / speech bursts separated by natural pauses
+    bursts: list[list[dict[str, Any]]] = []
+    cur_burst: list[dict[str, Any]] = [words[0]]
     for i in range(1, len(words)):
         gap = words[i]["start"] - words[i - 1]["end"]
-        if gap > PSEUDO_PAUSE_SEC:
-            speaker_num = (speaker_num % MAX_PSEUDO_SPEAKERS) + 1
-        words[i]["speaker"] = f"Speaker {speaker_num}"
+        if gap >= PSEUDO_PAUSE_SEC:
+            bursts.append(cur_burst)
+            cur_burst = []
+        cur_burst.append(words[i])
+    if cur_burst:
+        bursts.append(cur_burst)
+
+    # Detect if any bursts contain explicit self-introductions
+    # e.g. "I am Shivanshi" -> assign named speaker or distinct speaker ID
+    named_speakers: dict[str, int] = {}
+    next_speaker_id = 1
+    burst_speakers: list[int] = []
+
+    # Count how many distinct introductory speakers appear
+    for b in bursts:
+        burst_text = " ".join(w["w"] for w in b)
+        intro_name = detect_self_intro(burst_text)
+        if intro_name:
+            if intro_name not in named_speakers:
+                named_speakers[intro_name] = next_speaker_id
+                next_speaker_id += 1
+
+    num_participants = max(2, min(MAX_PSEUDO_SPEAKERS, max(len(named_speakers), 2)))
+    
+    current_speaker = 1
+    last_speaker = 1
+    for idx, b in enumerate(bursts):
+        burst_text = " ".join(w["w"] for w in b)
+        intro_name = detect_self_intro(burst_text)
+        
+        if intro_name and intro_name in named_speakers:
+            speaker_id = named_speakers[intro_name]
+        elif idx == 0:
+            speaker_id = 1
+        else:
+            # Alternating turn-taking: when the speaker changes, switch to the next active speaker
+            # rather than creating an infinite sequence of new speakers.
+            # Cycles through known participants so Speaker 1 speaks again!
+            speaker_id = (last_speaker % num_participants) + 1
+
+        last_speaker = speaker_id
+        for w in b:
+            w["speaker"] = f"Speaker {speaker_id}"
 
 
 def join_words(words: list[str]) -> str:

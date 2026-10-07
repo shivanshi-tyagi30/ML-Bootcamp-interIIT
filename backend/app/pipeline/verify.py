@@ -114,7 +114,23 @@ def verify(
     # 1-2. Summary and minutes: known ids only, no new facts.
     def keep_sentence(s: CitedSentence) -> CitedSentence | None:
         ids = known(s.evidence_segment_ids)
-        if not ids or unsupported_facts(s.text, cited_text(ids)):
+        if not ids:
+            stats.sentences_removed += 1
+            return None
+        missing = unsupported_facts(s.text, cited_text(ids))
+        if missing:
+            # Check if missing names or numbers exist in other segments of the transcript
+            added = False
+            for m in list(missing):
+                m_low = m.lower()
+                for other_id, other_seg in seg.items():
+                    if other_id not in ids and re.search(r"(?<!\w)" + re.escape(m_low) + r"(?!\w)", other_seg.text.lower()):
+                        ids.append(other_id)
+                        added = True
+                        break
+            if added:
+                missing = unsupported_facts(s.text, cited_text(ids))
+        if missing:
             stats.sentences_removed += 1
             return None
         return CitedSentence(text=s.text, evidence_segment_ids=ids)

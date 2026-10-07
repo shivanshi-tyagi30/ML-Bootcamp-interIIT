@@ -78,6 +78,9 @@ def capitalized_non_initial(text: str) -> list[str]:
         before = text[: m.start()]
         if not before.strip() or SENTENCE_END.search(before):
             continue
+        tok = re.sub(r"['’]s$", "", tok)
+        if not tok:
+            continue
         out.append(tok)
     return out
 
