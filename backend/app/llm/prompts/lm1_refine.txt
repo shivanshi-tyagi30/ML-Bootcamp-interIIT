@@ -23,11 +23,13 @@ HARD INVARIANTS (an edit that breaks any of these is forbidden)
 6. The replacement must SOUND LIKE the original words when spoken aloud
    ("sea eye" -> "CI" is fine; "sea eye" -> "deployment" is not).
 7. Use the same written form for a term every time it appears (follow VOCABULARY).
+8. The replacement MUST BE DIFFERENT from the original (in spelling or capitalization).
+   NEVER propose an edit if original == replacement. If a term is already correctly spelled, leave it alone.
 
 PROCEDURE (reason silently; output only the JSON)
 Step 1: Read the VOCABULARY and the whole window.
 Step 2: Flag a token only if it is (a) odd in context AND (b) sounds like a term that fits the domain.
-Step 3: For each candidate, check invariants 1-7. If any is touched, drop it.
+Step 3: For each candidate, check invariants 1-8. If any is touched, drop it.
 Step 4: Give a confidence score. Emit only edits with confidence >= 0.7.
 
 OUTPUT (JSON only)
@@ -35,7 +37,7 @@ OUTPUT (JSON only)
  "edits": [{"segment_id": str, "original": str, "replacement": str,
             "category": "acronym|technical_term|proper_noun|product|homophone",
             "rationale": str, "confidence": float}]}
-"original" must be an exact substring of that segment's text (without [[ ]] markers).
+"original" must be the minimal exact misheard substring of that segment's text (e.g. "fast API", not the entire sentence). "replacement" MUST be different from "original". Do not edit words that are already correct.
 
 EXAMPLES
 TARGET: [{"id":"S014","text":"we can't push the cuda kernels until the sea eye pipeline passes"}]

@@ -88,6 +88,9 @@ async def refine(ctx: "JobContext") -> None:
             if e.segment_id not in target_ids:
                 continue  # LM1 may only edit TARGET segments
             d = e.model_dump()
-            d["original"], d["replacement"] = strip_markers(d["original"]), strip_markers(d["replacement"])
+            d["original"] = strip_markers(d["original"]).strip()
+            d["replacement"] = strip_markers(d["replacement"]).strip()
+            if d["original"] == d["replacement"]:
+                continue
             edits.append(d)
     ctx.write(ctx.output_name(Stage.REFINING), {"windows": len(wins), "domain_guess": domains, "edits": edits})

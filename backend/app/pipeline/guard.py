@@ -78,7 +78,7 @@ def check_edit(edit: Edit, seg: Segment | None, vocab_terms: set[str], settings:
     o, r = edit.original, edit.replacement
     if edit.confidence < settings.LM1_MIN_CONFIDENCE:
         return "low_confidence"
-    if seg is None or not o or o not in seg.text:
+    if seg is None or not o or o not in seg.text or o.strip() == r.strip():
         return "not_found"
     if numbers(o) != numbers(r):
         return "number_changed"
@@ -135,6 +135,7 @@ def guard_edits(
     raw: list[Segment], proposed: list[Edit], vocab: dict[str, Any], settings: Settings,
 ) -> tuple[list[Segment], list[Edit], list[RejectedEdit]]:
     """Check every edit, resolve overlaps (higher confidence wins) and build the refined transcript."""
+    proposed = [e for e in proposed if e.original.strip() != e.replacement.strip()]
     by_id = {s.id: s for s in raw}
     vocab_terms = {t["term"].lower() for t in vocab.get("terms", []) if t.get("term")}
     accepted: list[Edit] = []

@@ -34,8 +34,10 @@ def speaker_for(word: dict[str, Any], turns: list[dict[str, Any]]) -> str | None
     return near if dist <= 0.5 else None
 
 
-PSEUDO_PAUSE_SEC = 0.42  # natural turn pause in conversation (~0.4s)
-MAX_PSEUDO_SPEAKERS = 3   # default typical meeting group size to rotate returning speakers
+RESPONSE_CUES = re.compile(
+    r"^(?:agreed|yes|yeah|yep|no|nope|sure|okay|ok|fine|right|exactly|that makes sense|let's postpone|let's finalize)\b",
+    re.I,
+)
 
 
 def detect_self_intro(text: str) -> str | None:
@@ -45,62 +47,49 @@ def detect_self_intro(text: str) -> str | None:
 
 
 def assign_pseudo_speakers(words: list[dict[str, Any]]) -> None:
-    """Assign pseudo-speaker labels based on pauses and conversational turn-taking.
-    
-    Identifies turn boundaries (>0.4s pause), assigns distinct speakers, and re-identifies
-    returning speakers rather than treating every turn as a new speaker.
+    """Assign pseudo-speaker labels based on conversational turn-taking and response cues.
+
+    Identifies true speaker transitions (answers to questions, response signals like 'Agreed',
+    and extended pauses) while keeping a speaker's pauses within their own turn from causing
+    fake speaker switches.
     """
     if not words:
         return
 
-    # First pass: identify word clusters / speech bursts separated by natural pauses
-    bursts: list[list[dict[str, Any]]] = []
-    cur_burst: list[dict[str, Any]] = [words[0]]
-    for i in range(1, len(words)):
-        gap = words[i]["start"] - words[i - 1]["end"]
-        if gap >= PSEUDO_PAUSE_SEC:
-            bursts.append(cur_burst)
-            cur_burst = []
-        cur_burst.append(words[i])
-    if cur_burst:
-        bursts.append(cur_burst)
+    full_text = " ".join(w["w"] for w in words)
+    named_mentions = set(re.findall(r"\b(?:hi|hello|hey)\s+([A-Z][a-z]+)\b", full_text, re.I))
+    intros = set(re.findall(r"\b(?:i am|i'm|my name is|this is)\s+([A-Z][a-z]+)\b", full_text, re.I))
+    all_names = {n.capitalize() for n in (named_mentions | intros)}
+    num_participants = max(2, min(3, len(all_names) if len(all_names) >= 2 else 2))
 
-    # Detect if any bursts contain explicit self-introductions
-    # e.g. "I am Shivanshi" -> assign named speaker or distinct speaker ID
-    named_speakers: dict[str, int] = {}
-    next_speaker_id = 1
-    burst_speakers: list[int] = []
-
-    # Count how many distinct introductory speakers appear
-    for b in bursts:
-        burst_text = " ".join(w["w"] for w in b)
-        intro_name = detect_self_intro(burst_text)
-        if intro_name:
-            if intro_name not in named_speakers:
-                named_speakers[intro_name] = next_speaker_id
-                next_speaker_id += 1
-
-    num_participants = max(2, min(MAX_PSEUDO_SPEAKERS, max(len(named_speakers), 2)))
-    
     current_speaker = 1
-    last_speaker = 1
-    for idx, b in enumerate(bursts):
-        burst_text = " ".join(w["w"] for w in b)
-        intro_name = detect_self_intro(burst_text)
-        
-        if intro_name and intro_name in named_speakers:
-            speaker_id = named_speakers[intro_name]
-        elif idx == 0:
-            speaker_id = 1
-        else:
-            # Alternating turn-taking: when the speaker changes, switch to the next active speaker
-            # rather than creating an infinite sequence of new speakers.
-            # Cycles through known participants so Speaker 1 speaks again!
-            speaker_id = (last_speaker % num_participants) + 1
+    words[0]["speaker"] = f"Speaker {current_speaker}"
 
-        last_speaker = speaker_id
-        for w in b:
-            w["speaker"] = f"Speaker {speaker_id}"
+    for i in range(1, len(words)):
+        prev = words[i - 1]
+        cur = words[i]
+        gap = cur["start"] - prev["end"]
+
+        prev_ended_sentence = bool(re.search(r"[.!?…]['\"”)]*$", prev["w"]))
+        prev_ended_question = bool(re.search(r"\?['\"”)]*$", prev["w"]))
+
+        next_chunk = " ".join(words[k]["w"] for k in range(i, min(len(words), i + 4))).strip()
+        is_response_cue = bool(RESPONSE_CUES.match(next_chunk))
+
+        turn_changed = False
+        if prev_ended_question and gap >= 0.35:
+            turn_changed = True
+        elif prev_ended_sentence and is_response_cue and gap >= 0.35:
+            turn_changed = True
+        elif prev_ended_sentence and gap >= 1.6:
+            turn_changed = True
+        elif gap >= 2.4:
+            turn_changed = True
+
+        if turn_changed:
+            current_speaker = (current_speaker % num_participants) + 1
+
+        cur["speaker"] = f"Speaker {current_speaker}"
 
 
 def join_words(words: list[str]) -> str:
@@ -111,11 +100,14 @@ def join_words(words: list[str]) -> str:
 def assemble_segments(
     whisper_segments: list[dict[str, Any]], word_updates: dict[str, dict[str, Any]], turns: list[dict[str, Any]],
 ) -> list[Segment]:
-    """Raw transcript segments with ids S001.. in time order."""
+    """Raw transcript segments with ids S001.. in time order.
+
+    Groups a speaker's single dialogue turn into one line/segment.
+    """
     words = flatten_words(whisper_segments)
     for i, w in enumerate(words):
         w.update(word_updates.get(str(i), {}))
-        
+
     if turns:
         for w in words:
             w["speaker"] = speaker_for(w, turns)
@@ -132,7 +124,7 @@ def assemble_segments(
                 or w["start"] - prev["end"] > PAUSE_SEC
                 or w["end"] - cur[0]["start"] > MAX_SEC
                 or len(cur) >= MAX_WORDS
-                or (SENTENCE_END.search(prev["w"]) and (w["seg"] != prev["seg"] or len(cur) >= SOFT_WORDS))
+                or (SENTENCE_END.search(prev["w"]) and (w.get("seg") != prev.get("seg") or len(cur) >= SOFT_WORDS))
             )
             if split:
                 groups.append(cur)
