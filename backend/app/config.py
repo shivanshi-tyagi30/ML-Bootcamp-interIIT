@@ -39,7 +39,10 @@ class Settings(BaseSettings):
     # Without Parakeet, Whisper words below this probability are marked disputed (0 = off).
     LOWCONF_DISPUTE_THRESHOLD: float = 0.45
 
-    DIARIZATION_ENABLED: bool = False
+    DIARIZATION_ENABLED: bool = True
+    DIARIZATION_BACKEND: Literal["auto", "ecapa", "pyannote"] = "auto"
+    ECAPA_MODEL: str = "speechbrain/spkrec-ecapa-voxceleb"
+    ECAPA_DISTANCE_THRESHOLD: float = 0.35
     HF_TOKEN: str = ""
 
     LLM_BACKEND: Literal["ollama", "vllm"] = "ollama"

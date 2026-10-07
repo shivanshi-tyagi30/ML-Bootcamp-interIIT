@@ -16,6 +16,11 @@ from app.models.record import (
 )
 
 
+import shutil
+import numpy as np
+import soundfile as sf
+
+
 def _ffmpeg(*args: str) -> None:
     subprocess.run(["ffmpeg", "-y", "-v", "error", *args], check=True)
 
@@ -27,8 +32,17 @@ def fixtures_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     (d / "empty.mp3").write_bytes(b"")
     (d / "fake.mp3").write_text("this is not audio, just text renamed to mp3\n" * 20)
     (d / "notes.pdf").write_bytes(b"%PDF-1.4\n%fake pdf\n")
-    _ffmpeg("-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono", "-t", "5", str(d / "silence.wav"))
-    _ffmpeg("-f", "lavfi", "-i", "sine=frequency=440:sample_rate=16000", "-t", "5", str(d / "tone.wav"))
+    if shutil.which("ffmpeg"):
+        _ffmpeg("-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono", "-t", "5", str(d / "silence.wav"))
+        _ffmpeg("-f", "lavfi", "-i", "sine=frequency=440:sample_rate=16000", "-t", "5", str(d / "tone.wav"))
+    else:
+        # Generate silence and tone directly via soundfile when ffmpeg is not on PATH
+        sr = 16000
+        silence_data = np.zeros(sr * 5, dtype=np.float32)
+        sf.write(str(d / "silence.wav"), silence_data, sr)
+        t = np.linspace(0, 5, sr * 5, endpoint=False, dtype=np.float32)
+        tone_data = np.sin(2 * np.pi * 440 * t)
+        sf.write(str(d / "tone.wav"), tone_data, sr)
     return d
 
 

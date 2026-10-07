@@ -12,7 +12,7 @@ Built from `TRACE Backend Build Spec v1.0`; deviations are listed at the end.
 | Speech-to-text | Whisper large-v3 via faster-whisper | `large-v3` (`WHISPER_MODEL`) | Words, timestamps and per-word confidence |
 | Speech check | Silero VAD | `silero-vad>=5.1` | Rejects recordings with under 2 s of speech |
 | Re-check (optional) | NVIDIA Parakeet-TDT-0.6B | `nvidia/parakeet-tdt-0.6b-v2` | Re-hears risky spans; disagreements become *disputed* words |
-| Diarization (optional) | pyannote | `pyannote/speaker-diarization-3.1` | Speaker 1, Speaker 2 … |
+| Diarization | ECAPA-TDNN / pyannote | `speechbrain/spkrec-ecapa-voxceleb` or pyannote | 192-d speaker embeddings clustered with cosine distance (Speaker 1, Speaker 2 …) |
 | LM1 refiner | Qwen3 14B | `qwen3:14b` (`LM1_MODEL`) | Pass A: meeting vocabulary. Pass B: terminology edits, checked by the guard |
 | LM2 documenter | Gemma 3 27B | `gemma3:27b` (`LM2_MODEL`) | Summary, minutes, decisions, proposals, tasks with pointers and citations |
 
@@ -58,11 +58,10 @@ vllm serve Qwen/Qwen3-14B --port 8001
 vllm serve google/gemma-3-27b-it --port 8002
 ```
 
-Parakeet needs `nemo_toolkit[asr]`; diarization needs `pyannote.audio`, `DIARIZATION_ENABLED=true` and an
-`HF_TOKEN` whose account accepted the terms of `pyannote/speaker-diarization-community-1` (pyannote 4) or
-`pyannote/speaker-diarization-3.1` (pyannote 3), plus `pyannote/segmentation-3.0`. Both are optional: without them
-the stage is skipped, the reason is recorded in `meta.models` and shown in the UI. Without Parakeet, Whisper words
-below `LOWCONF_DISPUTE_THRESHOLD` are marked disputed instead.
+Diarization uses SpeechBrain's **ECAPA-TDNN** (`speechbrain/spkrec-ecapa-voxceleb`) by default without requiring
+gated tokens or accounts. It extracts 192-d speaker embeddings from speech bursts and groups them using
+Agglomerative Clustering with cosine distance. Alternatively, Pyannote can be enabled with `DIARIZATION_BACKEND=pyannote`
+and an `HF_TOKEN`. Without Parakeet, Whisper words below `LOWCONF_DISPUTE_THRESHOLD` are marked disputed.
 
 ### Windows laptop, CPU only
 

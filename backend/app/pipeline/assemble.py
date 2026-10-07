@@ -92,13 +92,56 @@ def assign_pseudo_speakers(words: list[dict[str, Any]]) -> None:
         cur["speaker"] = f"Speaker {current_speaker}"
 
 
+def assign_speakers(words: list[dict[str, Any]], wav_path: Any = None) -> None:
+    """Assign speaker labels using ECAPA-TDNN embedding clustering on audio bursts.
+    
+    Falls back gracefully to conversational pause heuristics if audio or model is unavailable.
+    """
+    if not words:
+        return
+
+    # Identify speech bursts separated by natural pauses
+    bursts: list[list[dict[str, Any]]] = []
+    cur_burst: list[dict[str, Any]] = [words[0]]
+    for i in range(1, len(words)):
+        gap = words[i]["start"] - words[i - 1]["end"]
+        if gap >= PSEUDO_PAUSE_SEC:
+            bursts.append(cur_burst)
+            cur_burst = []
+        cur_burst.append(words[i])
+    if cur_burst:
+        bursts.append(cur_burst)
+
+    # Try ECAPA-TDNN speaker embedding and clustering first
+    if wav_path:
+        try:
+            from pathlib import Path
+            if Path(wav_path).exists():
+                from app.pipeline.ecapa_diarize import get_ecapa_identifier
+                identifier = get_ecapa_identifier()
+                spk_labels = identifier.identify_speakers(wav_path, bursts)
+                if spk_labels and len(spk_labels) == len(bursts):
+                    for b, spk in zip(bursts, spk_labels):
+                        for w in b:
+                            w["speaker"] = spk
+                    return
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Fallback to pause-based pseudo speakers
+    assign_pseudo_speakers(words)
+
+
 def join_words(words: list[str]) -> str:
     """Join words with single spaces (Whisper words already carry their punctuation)."""
     return re.sub(r"\s+", " ", " ".join(w.strip() for w in words)).strip()
 
 
 def assemble_segments(
-    whisper_segments: list[dict[str, Any]], word_updates: dict[str, dict[str, Any]], turns: list[dict[str, Any]],
+    whisper_segments: list[dict[str, Any]],
+    word_updates: dict[str, dict[str, Any]],
+    turns: list[dict[str, Any]],
+    wav_path: Any = None,
 ) -> list[Segment]:
     """Raw transcript segments with ids S001.. in time order.
 
@@ -112,7 +155,7 @@ def assemble_segments(
         for w in words:
             w["speaker"] = speaker_for(w, turns)
     else:
-        assign_pseudo_speakers(words)
+        assign_speakers(words, wav_path=wav_path)
 
     groups: list[list[dict[str, Any]]] = []
     cur: list[dict[str, Any]] = []
@@ -149,5 +192,10 @@ async def assemble_raw(ctx: "JobContext") -> None:
     whisper = ctx.read(ctx.output_name(Stage.TRANSCRIBING))
     recheck = ctx.read(ctx.output_name(Stage.RECHECKING)) or {}
     diar = ctx.read(ctx.output_name(Stage.DIARIZING)) or {}
-    segs = assemble_segments(whisper["segments"], recheck.get("word_updates", {}), diar.get("turns", []))
+    segs = assemble_segments(
+        whisper["segments"],
+        recheck.get("word_updates", {}),
+        diar.get("turns", []),
+        wav_path=ctx.wav_path,
+    )
     ctx.write(ctx.output_name(Stage.RAW_SAVED), [s.model_dump(mode="json") for s in segs])
