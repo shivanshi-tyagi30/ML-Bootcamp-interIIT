@@ -61,18 +61,31 @@ export function Workspace({ api, jobId, record: initialRecord, audioUrl, error, 
         return list.map((seg) => {
           if (seg.id !== segmentId) return seg;
 
+          const newTokens = trimmed.split(/\s+/);
           const words = seg.words ? seg.words.map((w) => ({ ...w })) : undefined;
           let newText = seg.text;
 
           if (words && words.length > 0 && wordIdx >= 0 && wordIdx < words.length) {
-            if (words[wordIdx].w === trimmed) return seg;
-            words[wordIdx].w = trimmed;
+            const origW = words[wordIdx];
+            const start = origW.start;
+            const end = origW.end;
+            const dur = Math.max(0.15, end - start);
+            const step = dur / newTokens.length;
+
+            const createdWords = newTokens.map((w, idx) => ({
+              w,
+              start: +(start + idx * step).toFixed(2),
+              end: +(start + (idx + 1) * step).toFixed(2),
+              conf: origW.conf ?? 1.0,
+            }));
+
+            words.splice(wordIdx, 1, ...createdWords);
 
             const textTokens = seg.text.split(/(\s+)/);
             let wCount = 0;
             const nextTokens = textTokens.map((tok) => {
               if (/^\s+$/.test(tok)) return tok;
-              if (wCount++ === wordIdx) return trimmed;
+              if (wCount++ === wordIdx) return newTokens.join(" ");
               return tok;
             });
             newText = nextTokens.join("");
@@ -81,7 +94,7 @@ export function Workspace({ api, jobId, record: initialRecord, audioUrl, error, 
             let wCount = 0;
             const nextTokens = textTokens.map((tok) => {
               if (/^\s+$/.test(tok)) return tok;
-              if (wCount++ === wordIdx) return trimmed;
+              if (wCount++ === wordIdx) return newTokens.join(" ");
               return tok;
             });
             newText = nextTokens.join("");
@@ -90,6 +103,42 @@ export function Workspace({ api, jobId, record: initialRecord, audioUrl, error, 
           return {
             ...seg,
             text: newText,
+            words,
+          };
+        });
+      };
+
+      return {
+        ...prev,
+        raw_transcript: updateSegList(prev.raw_transcript),
+        refined_transcript: updateSegList(prev.refined_transcript),
+      };
+    });
+  }, []);
+
+  const handleUpdateSentence = useCallback((segmentId: string, newSentence: string) => {
+    const trimmed = newSentence.trim();
+    if (!trimmed) return;
+
+    setRecord((prev) => {
+      const updateSegList = (list?: Segment[]) => {
+        if (!list) return list;
+        return list.map((seg) => {
+          if (seg.id !== segmentId) return seg;
+
+          const newTokens = trimmed.split(/\s+/);
+          const dur = Math.max(0.5, seg.end - seg.start);
+          const step = dur / newTokens.length;
+          const words = newTokens.map((w, idx) => ({
+            w,
+            start: +(seg.start + idx * step).toFixed(2),
+            end: +(seg.start + (idx + 1) * step).toFixed(2),
+            conf: 1.0,
+          }));
+
+          return {
+            ...seg,
+            text: trimmed,
             words,
           };
         });
@@ -278,6 +327,7 @@ export function Workspace({ api, jobId, record: initialRecord, audioUrl, error, 
           scrollTo={scrollTo}
           onSeek={(t) => audio.available && audio.playFrom(t)}
           onUpdateWord={handleUpdateWord}
+          onUpdateSentence={handleUpdateSentence}
           onStartEdit={handleStartEdit}
         />
         <RecordPane

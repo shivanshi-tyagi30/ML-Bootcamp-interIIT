@@ -18,6 +18,7 @@ interface Props {
   scrollTo: { id: string; nonce: number } | null;
   onSeek: (t: number) => void;
   onUpdateWord?: (segmentId: string, wordIdx: number, newWord: string) => void;
+  onUpdateSentence?: (segmentId: string, newSentence: string) => void;
   onStartEdit?: () => void;
 }
 
@@ -155,8 +156,8 @@ function EditableWord({
         onBlur={commit}
         onClick={(e) => e.stopPropagation()}
         onDoubleClick={(e) => e.stopPropagation()}
-        style={{ width: `${Math.max(2, draft.length + 1.2)}ch` }}
-        className="inline-block text-[15px] font-semibold text-ink bg-surface border-2 border-accent rounded px-1.5 py-0 shadow-xs outline-none ring-2 ring-accent/30 z-30 relative -my-0.5 align-baseline text-accent-deep"
+        style={{ minWidth: "10ch", width: `${Math.max(10, draft.length + 2)}ch`, maxWidth: "100%" }}
+        className="inline-block text-[15px] font-semibold text-ink bg-surface border-2 border-accent rounded px-2 py-0.5 shadow-xs outline-none ring-2 ring-accent/30 z-30 relative -my-0.5 align-baseline text-accent-deep"
       />
     );
   }
@@ -338,6 +339,7 @@ const Row = memo(function Row({
   isPlaying,
   onSeek,
   onUpdateWord,
+  onUpdateSentence,
   onStartEdit,
 }: {
   seg: Segment;
@@ -348,12 +350,30 @@ const Row = memo(function Row({
   isPlaying: boolean;
   onSeek: (t: number) => void;
   onUpdateWord?: (segmentId: string, wordIdx: number, newWord: string) => void;
+  onUpdateSentence?: (segmentId: string, newSentence: string) => void;
   onStartEdit?: () => void;
 }) {
+  const [editingSentence, setEditingSentence] = useState(false);
+  const [sentenceDraft, setSentenceDraft] = useState(seg.text);
+
+  useEffect(() => {
+    setSentenceDraft(seg.text);
+  }, [seg.text]);
+
+  const commitSentence = () => {
+    const trimmed = sentenceDraft.trim();
+    if (trimmed && trimmed !== seg.text) {
+      onUpdateSentence?.(seg.id, trimmed);
+    } else {
+      setSentenceDraft(seg.text);
+    }
+    setEditingSentence(false);
+  };
+
   return (
     <div
       className={cx(
-        "grid grid-cols-[3.5rem_1fr] gap-x-3 border-l-2 px-4 py-2.5 transition-all duration-300 ease-out rounded-r-md",
+        "group grid grid-cols-[3.5rem_1fr] gap-x-3 border-l-2 px-4 py-2.5 transition-all duration-300 ease-out rounded-r-md",
         active
           ? "border-accent bg-accent-soft/40 shadow-sm translate-x-1"
           : "border-transparent hover:bg-raised/40",
@@ -367,20 +387,62 @@ const Row = memo(function Row({
         {fmtTime(seg.start)}
         <div className="text-[10px] opacity-70">{seg.id}</div>
       </button>
-      <div>
-        {seg.speaker && <div className="mb-0.5 text-xs font-medium text-ink-2">{seg.speaker}</div>}
-        <SegmentContent
-          seg={seg}
-          pieces={pieces}
-          mode={mode}
-          active={active}
-          currentTime={currentTime}
-          isPlaying={isPlaying}
-          onSeek={onSeek}
-          onUpdateWord={onUpdateWord}
-          onStartEdit={onStartEdit}
-        />
-      </div>
+
+      {editingSentence ? (
+        <div className="flex-1">
+          <div className="mb-1 flex items-center justify-between text-xs font-medium text-ink-2">
+            <span>{seg.speaker}</span>
+            <span className="text-[10.5px] text-ink-3">Press Enter to save · Esc to cancel</span>
+          </div>
+          <textarea
+            autoFocus
+            value={sentenceDraft}
+            onChange={(e) => setSentenceDraft(e.target.value)}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                commitSentence();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                setSentenceDraft(seg.text);
+                setEditingSentence(false);
+              }
+            }}
+            onBlur={commitSentence}
+            rows={2}
+            className="w-full text-[15px] leading-relaxed font-medium text-ink bg-surface border-2 border-accent rounded p-2 shadow-xs outline-none ring-2 ring-accent/30 resize-none"
+          />
+        </div>
+      ) : (
+        <div>
+          <div className="mb-0.5 flex items-center justify-between text-xs font-medium text-ink-2">
+            {seg.speaker && <span>{seg.speaker}</span>}
+            <button
+              onClick={() => {
+                onStartEdit?.();
+                setSentenceDraft(seg.text);
+                setEditingSentence(true);
+              }}
+              className="opacity-0 group-hover:opacity-100 hover:text-accent-deep text-[11px] text-ink-3 transition-opacity ml-auto"
+              title="Edit entire sentence"
+            >
+              ✏ Edit line
+            </button>
+          </div>
+          <SegmentContent
+            seg={seg}
+            pieces={pieces}
+            mode={mode}
+            active={active}
+            currentTime={currentTime}
+            isPlaying={isPlaying}
+            onSeek={onSeek}
+            onUpdateWord={onUpdateWord}
+            onStartEdit={onStartEdit}
+          />
+        </div>
+      )}
     </div>
   );
 });
@@ -398,6 +460,7 @@ export function TranscriptPane({
   scrollTo,
   onSeek,
   onUpdateWord,
+  onUpdateSentence,
   onStartEdit,
 }: Props) {
   const parent = useRef<HTMLDivElement>(null);
@@ -497,6 +560,7 @@ export function TranscriptPane({
                   isPlaying={isPlaying}
                   onSeek={onSeek}
                   onUpdateWord={onUpdateWord}
+                  onUpdateSentence={onUpdateSentence}
                   onStartEdit={onStartEdit}
                 />
               </div>
