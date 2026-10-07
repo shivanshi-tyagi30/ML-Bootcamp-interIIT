@@ -13,6 +13,8 @@ interface Props {
   mode: TranscriptMode;
   onMode: (m: TranscriptMode) => void;
   activeId: string | null;
+  currentTime?: number;
+  isPlaying?: boolean;
   scrollTo: { id: string; nonce: number } | null;
   onSeek: (t: number) => void;
 }
@@ -85,24 +87,131 @@ function PieceView({ p, mode }: { p: Piece; mode: TranscriptMode }) {
   }
 }
 
-const Row = memo(function Row({
+function SegmentContent({
   seg,
   pieces,
   mode,
   active,
+  currentTime,
+  isPlaying,
   onSeek,
 }: {
   seg: Segment;
   pieces: Piece[];
   mode: TranscriptMode;
   active: boolean;
+  currentTime: number;
+  isPlaying: boolean;
+  onSeek: (t: number) => void;
+}) {
+  const words = seg.words;
+  if (!words || !words.length) {
+    return (
+      <p className="text-[15px] leading-relaxed">
+        {pieces.map((p, i) => (
+          <PieceView key={i} p={p} mode={mode} />
+        ))}
+      </p>
+    );
+  }
+
+  let activeWordIdx = -1;
+  if (active && isPlaying) {
+    activeWordIdx = words.findIndex((w, i, arr) => {
+      const nextStart = arr[i + 1]?.start ?? (w.end + 0.35);
+      return currentTime >= w.start && currentTime < Math.max(w.end, nextStart);
+    });
+  }
+
+  let wordCursor = 0;
+
+  return (
+    <p className="text-[15px] leading-relaxed">
+      {pieces.map((p, pIdx) => {
+        if (p.kind === "text") {
+          const tokens = p.text.split(/(\s+)/);
+          return (
+            <span key={pIdx}>
+              {tokens.map((tok, tIdx) => {
+                if (!tok) return null;
+                if (/^\s+$/.test(tok)) {
+                  return <span key={tIdx}>{tok}</span>;
+                }
+                const wIdx = wordCursor++;
+                const w = words[wIdx];
+                const isCurrent = wIdx === activeWordIdx;
+                return (
+                  <span
+                    key={tIdx}
+                    onClick={() => w && onSeek(w.start)}
+                    className={cx(
+                      "inline-block transition-all duration-150 ease-out origin-bottom",
+                      isCurrent
+                        ? "scale-[1.06] -translate-y-[1px] font-semibold text-accent-deep bg-accent-soft/80 px-0.5 rounded shadow-xs z-10 relative"
+                        : "scale-100",
+                      w && "cursor-pointer hover:text-accent-deep",
+                    )}
+                  >
+                    {tok}
+                  </span>
+                );
+              })}
+            </span>
+          );
+        }
+
+        const pieceWordCount = p.kind === "disputed" ? 1 : Math.max(1, p.edit.original.trim().split(/\s+/).length);
+        const startWIdx = wordCursor;
+        const endWIdx = wordCursor + pieceWordCount;
+        wordCursor += pieceWordCount;
+
+        const isCurrent = activeWordIdx >= startWIdx && activeWordIdx < endWIdx;
+        const pieceStart = words[startWIdx]?.start ?? seg.start;
+
+        return (
+          <span
+            key={pIdx}
+            onClick={() => onSeek(pieceStart)}
+            className={cx(
+              "inline-block transition-all duration-150 ease-out origin-bottom",
+              isCurrent
+                ? "scale-[1.06] -translate-y-[1px] font-semibold shadow-xs z-10 relative ring-1 ring-accent/40 rounded px-0.5"
+                : "scale-100",
+              "cursor-pointer",
+            )}
+          >
+            <PieceView p={p} mode={mode} />
+          </span>
+        );
+      })}
+    </p>
+  );
+}
+
+const Row = memo(function Row({
+  seg,
+  pieces,
+  mode,
+  active,
+  currentTime,
+  isPlaying,
+  onSeek,
+}: {
+  seg: Segment;
+  pieces: Piece[];
+  mode: TranscriptMode;
+  active: boolean;
+  currentTime: number;
+  isPlaying: boolean;
   onSeek: (t: number) => void;
 }) {
   return (
     <div
       className={cx(
-        "grid grid-cols-[3.5rem_1fr] gap-x-3 border-l-2 px-4 py-2.5",
-        active ? "border-accent bg-accent-soft/50" : "border-transparent",
+        "grid grid-cols-[3.5rem_1fr] gap-x-3 border-l-2 px-4 py-2.5 transition-all duration-300 ease-out rounded-r-md",
+        active
+          ? "border-accent bg-accent-soft/40 shadow-sm translate-x-1"
+          : "border-transparent hover:bg-raised/40",
       )}
     >
       <button
@@ -115,17 +224,33 @@ const Row = memo(function Row({
       </button>
       <div>
         {seg.speaker && <div className="mb-0.5 text-xs font-medium text-ink-2">{seg.speaker}</div>}
-        <p className="text-[15px] leading-relaxed">
-          {pieces.map((p, i) => (
-            <PieceView key={i} p={p} mode={mode} />
-          ))}
-        </p>
+        <SegmentContent
+          seg={seg}
+          pieces={pieces}
+          mode={mode}
+          active={active}
+          currentTime={currentTime}
+          isPlaying={isPlaying}
+          onSeek={onSeek}
+        />
       </div>
     </div>
   );
 });
 
-export function TranscriptPane({ raw, accepted, rejected, hasRefinement, mode, onMode, activeId, scrollTo, onSeek }: Props) {
+export function TranscriptPane({
+  raw,
+  accepted,
+  rejected,
+  hasRefinement,
+  mode,
+  onMode,
+  activeId,
+  currentTime = 0,
+  isPlaying = false,
+  scrollTo,
+  onSeek,
+}: Props) {
   const parent = useRef<HTMLDivElement>(null);
   const effectiveMode: TranscriptMode = hasRefinement ? mode : "raw";
 
@@ -150,6 +275,14 @@ export function TranscriptPane({ raw, accepted, rejected, hasRefinement, mode, o
     estimateSize: () => 72,
     overscan: 8,
   });
+
+  // Smoothly track and scroll to the currently spoken sentence as audio plays
+  useEffect(() => {
+    if (!isPlaying || !activeId) return;
+    const i = index.get(activeId);
+    if (i == null) return;
+    v.scrollToIndex(i, { align: "center", behavior: "smooth" });
+  }, [activeId, isPlaying, index, v]);
 
   useEffect(() => {
     if (!scrollTo) return;
@@ -189,7 +322,7 @@ export function TranscriptPane({ raw, accepted, rejected, hasRefinement, mode, o
           }
         />
       </header>
-      <div ref={parent} className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={parent} className="min-h-0 flex-1 overflow-y-auto scroll-smooth">
         <div style={{ height: v.getTotalSize(), position: "relative" }}>
           {v.getVirtualItems().map((item) => {
             const seg = raw[item.index];
@@ -206,6 +339,8 @@ export function TranscriptPane({ raw, accepted, rejected, hasRefinement, mode, o
                   pieces={pieces[item.index]}
                   mode={effectiveMode}
                   active={seg.id === activeId}
+                  currentTime={currentTime}
+                  isPlaying={isPlaying}
                   onSeek={onSeek}
                 />
               </div>

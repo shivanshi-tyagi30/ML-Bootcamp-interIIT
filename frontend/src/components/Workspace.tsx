@@ -209,6 +209,8 @@ export function Workspace({ api, jobId, record, audioUrl, error, theme, onTheme,
           mode={mode}
           onMode={setMode}
           activeId={activeId}
+          currentTime={audio.time}
+          isPlaying={audio.playing}
           scrollTo={scrollTo}
           onSeek={(t) => audio.available && audio.playFrom(t)}
         />
