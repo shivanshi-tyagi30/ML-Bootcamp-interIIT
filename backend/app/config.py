@@ -42,7 +42,8 @@ class Settings(BaseSettings):
     DIARIZATION_ENABLED: bool = True
     DIARIZATION_BACKEND: Literal["auto", "ecapa", "pyannote"] = "auto"
     ECAPA_MODEL: str = "speechbrain/spkrec-ecapa-voxceleb"
-    ECAPA_DISTANCE_THRESHOLD: float = 0.35
+    ECAPA_DISTANCE_THRESHOLD: float = 0.6  # higher = fewer speakers; ignored when DIARIZATION_NUM_SPEAKERS is set
+    DIARIZATION_NUM_SPEAKERS: int = 0  # 0 = detect; set it when you know how many people spoke (most accurate)
     HF_TOKEN: str = ""
 
     LLM_BACKEND: Literal["ollama", "vllm"] = "ollama"

@@ -4,10 +4,10 @@
 #   pip install -r requirements-windows.txt
 # Also needed outside pip: ffmpeg (winget install Gyan.FFmpeg) and Ollama (https://ollama.com/download).
 # Not included: nemo_toolkit (Parakeet) does not build on Windows; the app marks low-confidence words instead.
-# Optional speaker labels: pip install pyannote.audio  (then set DIARIZATION_ENABLED=true and HF_TOKEN in .env)
 -r requirements-dev.txt
 faster-whisper>=1.0.3
 silero-vad>=5.1
 torch>=2.3
 torchaudio>=2.3
-speechbrain>=1.0.0
+speechbrain>=1.0.0      # speaker labels (ECAPA-TDNN, no Hugging Face token needed)
+scikit-learn>=1.3

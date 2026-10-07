@@ -1,14 +1,20 @@
-"""ECAPA-TDNN speaker embedding extraction and clustering.
+"""Speaker labels from ECAPA-TDNN voice embeddings (SpeechBrain), clustered per meeting.
 
-Uses SpeechBrain's ECAPA-TDNN model (spkrec-ecapa-voxceleb) to extract 192-dimensional
-speaker embeddings for speech bursts/segments and cluster them with Agglomerative Clustering.
+How it works:
+1. Whisper's words are grouped into speech bursts (split at pauses and every MAX_BURST_SEC).
+2. Each burst gets a 192-d ECAPA embedding (a voice fingerprint) on the CPU.
+3. Bursts of at least MIN_CLUSTER_SEC are clustered (agglomerative, cosine distance, average linkage).
+   Short bursts ("Yes.", "Agreed.") give noisy embeddings, so they are not allowed to start a speaker;
+   they join the closest cluster afterwards.
+4. Clusters with very little speech are merged into their nearest neighbour, so noise does not
+   become "Speaker 5".
+
+No Hugging Face token is needed; the model (~80 MB) downloads once.
 """
 
 from __future__ import annotations
 
 import logging
-import os
-import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -18,162 +24,180 @@ import numpy as np
 log = logging.getLogger(__name__)
 
 DEFAULT_ECAPA_MODEL = "speechbrain/spkrec-ecapa-voxceleb"
-DEFAULT_DISTANCE_THRESHOLD = 0.35  # Cosine distance (1 - cos_sim); ~0.65 similarity
-MIN_AUDIO_DURATION_SEC = 0.4       # Minimum audio duration for stable embeddings
+DEFAULT_DISTANCE_THRESHOLD = 0.6  # cosine distance; same voice is usually < 0.5 on 2-3 s clips
+BURST_GAP_SEC = 0.42  # a pause this long may be a turn change
+MAX_BURST_SEC = 8.0  # long monologues are cut so a quick reply without a pause can still be seen
+MIN_CLUSTER_SEC = 1.0  # shorter bursts never create a speaker on their own
+MIN_SPEAKER_SEC = 3.0  # clusters with less speech than this are merged into the nearest one
+MIN_EMBED_SEC = 0.4  # ECAPA needs a little audio; shorter clips are repeated to this length
+
+
+def make_bursts(words: list[dict[str, Any]], gap: float = BURST_GAP_SEC,
+                max_sec: float = MAX_BURST_SEC) -> list[tuple[float, float]]:
+    """(start, end) of speech bursts from Whisper words."""
+    out: list[tuple[float, float]] = []
+    start = end = None
+    for w in words:
+        if start is None:
+            start, end = w["start"], w["end"]
+        elif w["start"] - end >= gap or w["end"] - start > max_sec:
+            out.append((float(start), float(end)))
+            start, end = w["start"], w["end"]
+        else:
+            end = max(end, w["end"])
+    if start is not None:
+        out.append((float(start), float(end)))
+    return out
+
+
+def _unit(x: np.ndarray) -> np.ndarray:
+    """Rows scaled to unit length."""
+    n = np.linalg.norm(x, axis=-1, keepdims=True)
+    return x / np.maximum(n, 1e-9)
+
+
+def cluster_bursts(
+    embeddings: np.ndarray, durations: list[float], threshold: float = DEFAULT_DISTANCE_THRESHOLD,
+    n_speakers: int = 0, min_cluster_sec: float = MIN_CLUSTER_SEC, min_speaker_sec: float = MIN_SPEAKER_SEC,
+) -> list[int]:
+    """Speaker index per burst (0, 1, 0, 2...) in order of first appearance.
+
+    `n_speakers` > 0 fixes the number of speakers (most accurate when known); otherwise the
+    cosine-distance `threshold` decides.
+    """
+    n = len(durations)
+    if n == 0:
+        return []
+    embs = _unit(np.asarray(embeddings, dtype=np.float32))
+    dur = np.asarray(durations, dtype=np.float32)
+    anchors = np.where(dur >= min_cluster_sec)[0]
+    if len(anchors) == 0:  # all bursts short: use them all
+        anchors = np.arange(n)
+
+    if len(anchors) == 1:
+        anchor_labels = np.zeros(1, dtype=int)
+    else:
+        from sklearn.cluster import AgglomerativeClustering
+
+        k = min(n_speakers, len(anchors)) if n_speakers > 0 else None
+        model = AgglomerativeClustering(
+            n_clusters=k, metric="cosine", linkage="average", distance_threshold=None if k else threshold,
+        )
+        anchor_labels = model.fit_predict(embs[anchors])
+
+    def centroids(lbls: np.ndarray, idx: np.ndarray) -> dict[int, np.ndarray]:
+        return {c: _unit(embs[idx[lbls == c]].mean(axis=0)) for c in np.unique(lbls)}
+
+    # Merge clusters with too little speech into the closest bigger one (unless the count is fixed).
+    if not n_speakers:
+        while True:
+            cents = centroids(anchor_labels, anchors)
+            if len(cents) < 2:
+                break
+            speech = {c: float(dur[anchors[anchor_labels == c]].sum()) for c in cents}
+            small = min(speech, key=speech.get)
+            if speech[small] >= min_speaker_sec:
+                break
+            others = [c for c in cents if c != small]
+            target = max(others, key=lambda c: float(cents[small] @ cents[c]))
+            anchor_labels = np.where(anchor_labels == small, target, anchor_labels)
+
+    # Every burst (short ones included) takes the closest speaker centroid; anchors keep their cluster.
+    cents = centroids(anchor_labels, anchors)
+    keys = list(cents)
+    mat = np.stack([cents[c] for c in keys])
+    labels = [keys[int(np.argmax(mat @ embs[i]))] for i in range(n)]
+    for a, lbl in zip(anchors, anchor_labels):
+        labels[int(a)] = int(lbl)
+
+    order: dict[int, int] = {}
+    return [order.setdefault(lbl, len(order)) for lbl in labels]
 
 
 class EcapaSpeakerIdentifier:
-    """Extracts speaker embeddings using ECAPA-TDNN and clusters them into distinct speakers."""
+    """ECAPA-TDNN embedder, loaded on first use."""
 
-    def __init__(self, model_source: str = DEFAULT_ECAPA_MODEL, device: str = "auto") -> None:
-        """Initialize the identifier (lazy loading)."""
+    def __init__(self, model_source: str = DEFAULT_ECAPA_MODEL, savedir: str | Path | None = None) -> None:
+        """Remember where to load the model from; nothing is loaded yet."""
         self.model_source = model_source
-        self.device_str = device
+        self.savedir = Path(savedir) if savedir else Path("data") / "models" / "ecapa"
         self._classifier: Any = None
         self._lock = threading.Lock()
-        self._device: str | None = None
 
     @property
     def loaded(self) -> bool:
-        """Whether the model is already loaded in memory."""
+        """Whether the model is in memory."""
         return self._classifier is not None
 
-    def _ensure_loaded(self) -> Any:
-        """Load the SpeechBrain ECAPA-TDNN model thread-safely."""
-        if self._classifier is not None:
-            return self._classifier
-
+    def _load(self) -> Any:
+        """Load SpeechBrain's EncoderClassifier once (CPU unless CUDA is available)."""
         with self._lock:
             if self._classifier is None:
                 import torch
                 from speechbrain.inference.speaker import EncoderClassifier
 
-                if self.device_str == "auto":
-                    self._device = "cuda" if torch.cuda.is_available() else "cpu"
-                else:
-                    self._device = self.device_str
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                kwargs: dict[str, Any] = {"source": self.model_source, "savedir": str(self.savedir),
+                                          "run_opts": {"device": device}}
+                try:  # copy files instead of symlinking: symlinks need admin rights on Windows
+                    from speechbrain.utils.fetching import LocalStrategy
 
-                log.info("Loading ECAPA-TDNN model '%s' on %s", self.model_source, self._device)
-                self._classifier = EncoderClassifier.from_hparams(
-                    source=self.model_source,
-                    run_opts={"device": self._device},
-                )
+                    kwargs["local_strategy"] = LocalStrategy.COPY
+                except ImportError:
+                    pass
+                log.info("loading ECAPA-TDNN %s on %s", self.model_source, device)
+                self._classifier = EncoderClassifier.from_hparams(**kwargs)
+                self._device = device
         return self._classifier
 
-    def extract_embedding(self, wav_data: np.ndarray, sample_rate: int = 16000) -> np.ndarray:
-        """Extract a 192-dimensional normalized speaker embedding from audio waveform."""
+    def embed(self, clip: np.ndarray, sr: int = 16000) -> np.ndarray:
+        """Unit-length 192-d embedding of a mono clip."""
         import torch
 
-        classifier = self._ensure_loaded()
-
-        # Ensure single channel 1D float32
-        if wav_data.ndim > 1:
-            wav_data = np.mean(wav_data, axis=-1)
-        wav_data = wav_data.astype(np.float32)
-
-        # Pad if shorter than minimum required length
-        min_samples = int(MIN_AUDIO_DURATION_SEC * sample_rate)
-        if len(wav_data) < min_samples:
-            if len(wav_data) == 0:
-                return np.zeros(192, dtype=np.float32)
-            reps = int(np.ceil(min_samples / len(wav_data)))
-            wav_data = np.tile(wav_data, reps)[:min_samples]
-
-        tensor = torch.from_numpy(wav_data).unsqueeze(0).to(self._device)
+        clf = self._load()
+        clip = np.asarray(clip, dtype=np.float32)
+        if clip.ndim > 1:
+            clip = clip.mean(axis=-1)
+        need = int(MIN_EMBED_SEC * sr)
+        if len(clip) == 0:
+            return np.zeros(192, dtype=np.float32)
+        if len(clip) < need:
+            clip = np.tile(clip, int(np.ceil(need / len(clip))))[:need]
         with torch.no_grad():
-            emb = classifier.encode_batch(tensor)
+            emb = clf.encode_batch(torch.from_numpy(clip).unsqueeze(0).to(self._device))
+        return _unit(emb.squeeze().cpu().numpy().astype(np.float32))
 
-        emb_np = emb.squeeze().cpu().numpy().astype(np.float32)
-        norm = np.linalg.norm(emb_np)
-        if norm > 1e-6:
-            emb_np = emb_np / norm
-        return emb_np
-
-    def cluster_embeddings(
-        self,
-        embeddings: list[np.ndarray],
-        distance_threshold: float = DEFAULT_DISTANCE_THRESHOLD,
+    def label_bursts(
+        self, wav_path: str | Path, bursts: list[tuple[float, float]], threshold: float = DEFAULT_DISTANCE_THRESHOLD,
+        n_speakers: int = 0, should_stop: Any = None,
     ) -> list[int]:
-        """Cluster speaker embeddings using Agglomerative Clustering with cosine distance.
-        
-        Returns cluster indices (0, 1, 0, 2...) corresponding to each input embedding.
-        """
-        n_samples = len(embeddings)
-        if n_samples == 0:
-            return []
-        if n_samples == 1:
-            return [0]
-
-        from sklearn.cluster import AgglomerativeClustering
-
-        embs = np.stack(embeddings)
-        clustering = AgglomerativeClustering(
-            metric="cosine",
-            linkage="average",
-            distance_threshold=distance_threshold,
-            n_clusters=None,
-        )
-        labels = clustering.fit_predict(embs)
-        return labels.tolist()
-
-    def identify_speakers(
-        self,
-        audio_path: str | Path,
-        bursts: list[list[dict[str, Any]]],
-        distance_threshold: float = DEFAULT_DISTANCE_THRESHOLD,
-    ) -> list[str]:
-        """Extract embeddings for each speech burst from audio and assign 'Speaker 1', 'Speaker 2'... labels.
-        
-        Preserves speaker consistency when a speaker re-enters the conversation later.
-        """
+        """Speaker index per burst."""
         import soundfile as sf
 
         if not bursts:
             return []
-
-        path = Path(audio_path)
-        if not path.exists():
-            log.warning("Audio file %s does not exist for ECAPA-TDNN speaker identification", path)
-            return []
-
-        audio, sr = sf.read(str(path), dtype="float32")
+        audio, sr = sf.read(str(wav_path), dtype="float32", always_2d=False)
         if audio.ndim > 1:
-            audio = np.mean(audio, axis=-1)
+            audio = audio.mean(axis=-1)
+        embs = []
+        for a, b in bursts:
+            if should_stop and should_stop():
+                from app.core.errors import JobCancelled
 
-        embeddings: list[np.ndarray] = []
-        for b in bursts:
-            start_sec = max(0.0, float(b[0]["start"]))
-            end_sec = max(start_sec + 0.1, float(b[-1]["end"]))
-
-            start_sample = int(start_sec * sr)
-            end_sample = min(len(audio), int(end_sec * sr))
-            slice_data = audio[start_sample:end_sample]
-
-            emb = self.extract_embedding(slice_data, sr)
-            embeddings.append(emb)
-
-        cluster_labels = self.cluster_embeddings(embeddings, distance_threshold=distance_threshold)
-
-        # Map cluster labels to display names 'Speaker 1', 'Speaker 2' in order of appearance
-        speaker_map: dict[int, str] = {}
-        result_speakers: list[str] = []
-        for cluster_id in cluster_labels:
-            if cluster_id not in speaker_map:
-                speaker_map[cluster_id] = f"Speaker {len(speaker_map) + 1}"
-            result_speakers.append(speaker_map[cluster_id])
-
-        return result_speakers
+                raise JobCancelled()
+            embs.append(self.embed(audio[int(a * sr) : max(int(a * sr) + 1, int(b * sr))], sr))
+        return cluster_bursts(np.stack(embs), [b - a for a, b in bursts], threshold, n_speakers)
 
 
-_default_identifier: EcapaSpeakerIdentifier | None = None
-_identifier_lock = threading.Lock()
+_default: EcapaSpeakerIdentifier | None = None
+_default_lock = threading.Lock()
 
 
-def get_ecapa_identifier(model_source: str = DEFAULT_ECAPA_MODEL, device: str = "auto") -> EcapaSpeakerIdentifier:
-    """Get the process-wide ECAPA-TDNN speaker identifier singleton."""
-    global _default_identifier
-    if _default_identifier is None:
-        with _identifier_lock:
-            if _default_identifier is None:
-                _default_identifier = EcapaSpeakerIdentifier(model_source=model_source, device=device)
-    return _default_identifier
+def get_ecapa_identifier(model_source: str = DEFAULT_ECAPA_MODEL, savedir: str | Path | None = None,
+                         ) -> EcapaSpeakerIdentifier:
+    """Process-wide identifier (raises ImportError on first use if speechbrain is missing)."""
+    global _default
+    with _default_lock:
+        if _default is None:
+            _default = EcapaSpeakerIdentifier(model_source, savedir)
+    return _default

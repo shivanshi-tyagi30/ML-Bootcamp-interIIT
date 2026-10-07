@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import jellyfish
@@ -62,15 +64,31 @@ def _touches_disputed_frozen(edit: Edit, seg: Segment, start: int) -> bool:
     return False
 
 
+@lru_cache
+def known_places() -> frozenset[str]:
+    """Lower-cased standard spellings of places and institutions (app/data/places.txt)."""
+    path = Path(__file__).resolve().parent.parent / "data" / "places.txt"
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return frozenset()
+    return frozenset(ln.strip().lower() for ln in lines if ln.strip() and not ln.startswith("#"))
+
+
 def _name_changed(edit: Edit, seg: Segment, start: int, vocab_terms: set[str]) -> bool:
-    """A non-initial capitalized token in `original` is changed without vocabulary support."""
+    """A non-initial capitalized token in `original` is changed without support.
+
+    Supported: the replacement is a meeting vocabulary term (which includes the user's glossary) or a
+    known place/institution spelling (e.g. "Guhati" -> "Guwahati"). People's names are in neither list,
+    so they stay as heard. Sound-alike is still checked afterwards.
+    """
     caps = [c for c in capitalized_non_initial(seg.text[: start + len(edit.original)]) if c in edit.original]
     changed = [c for c in caps if c not in edit.replacement]
     if not changed:
         return False
-    ok_category = edit.category in ("proper_noun", "product")
-    in_vocab = edit.replacement.lower() in vocab_terms or any(t and t in edit.replacement.lower() for t in vocab_terms)
-    return not (ok_category and in_vocab)
+    r = edit.replacement.lower().strip()
+    in_vocab = r in vocab_terms or any(t and t in r for t in vocab_terms)
+    return not (in_vocab or r in known_places())
 
 
 def check_edit(edit: Edit, seg: Segment | None, vocab_terms: set[str], settings: Settings) -> str | None:

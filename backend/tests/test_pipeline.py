@@ -86,5 +86,6 @@ def test_resume_skips_finished_stages(settings, fixtures_dir):
         return db, llm
 
     db, llm = asyncio.run(go())
+    assert asyncio.run(db.get(JOB))["status"] == "completed"
     expected_model = "LM2Output" if settings.LM2_SCRATCHPAD else "LM2Record"
     assert llm.calls == [expected_model]  # only the failed stage and later ones ran again

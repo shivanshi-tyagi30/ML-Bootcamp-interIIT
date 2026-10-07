@@ -16,7 +16,8 @@ HARD INVARIANTS (an edit that breaks any of these is forbidden)
 1. Numbers, quantities, dates, times, versions, money: never change their value.
 2. Negation and modality: never add, remove, or move "not", "no", "never", "n't",
    "can't", "won't", "might", "should", "must", "maybe".
-3. People's names: keep them as heard.
+3. People's names: keep them as heard. Place, institution and company names MAY be corrected to their
+   standard spelling when the heard form sounds the same ("Guhati" -> "Guwahati", "Banglore" -> "Bangalore").
 4. Commitments and hedges stay exactly as strong or weak as spoken
    ("I'll try" stays "I'll try", not "I will").
 5. Grammar, filler words, false starts, and speaking style: do not fix them.
@@ -54,6 +55,11 @@ TARGET: [{"id":"S040","text":"Ravi said he'll maybe look at the rag eval"}]
 OUTPUT: {"domain_guess":"ML engineering","edits":[
  {"segment_id":"S040","original":"rag eval","replacement":"RAG eval","category":"acronym","rationale":"retrieval-augmented generation evaluation","confidence":0.85}]}
 (The name "Ravi" and the hedge "maybe" were kept.)
+
+TARGET: [{"id":"S045","text":"Priya is joining us from IIT Guhati for the tech meet"}]
+OUTPUT: {"domain_guess":"event planning","edits":[
+ {"segment_id":"S045","original":"Guhati","replacement":"Guwahati","category":"proper_noun","rationale":"standard spelling of the city","confidence":0.9}]}
+(The person's name "Priya" was kept; the place name was corrected.)
 
 TARGET: [{"id":"S052","text":"we agreed the design looks good overall"}]
 OUTPUT: {"domain_guess":"general","edits":[]}

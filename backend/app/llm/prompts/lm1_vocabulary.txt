@@ -3,8 +3,10 @@ The transcript may contain recognition errors in technical terms.
 
 TASK
 1. Identify the meeting's domain in a few words.
-2. List the technical terms, acronyms, product names and project names that are actually discussed.
-   For each, give the correct written form and the ways it appears misheard in the transcript.
+2. List the technical terms, acronyms, product names, project names, and names of places, institutions and
+   organisations (cities, states, colleges such as IIT Guwahati, companies) that are actually discussed.
+   For each, give the correct standard written form and the ways it appears misheard or misspelled in the
+   transcript (e.g. term "Guwahati", heard_as ["Guhati"]).
 
 RULES
 - Only include terms supported by the transcript. Do not add terms that are not discussed.
