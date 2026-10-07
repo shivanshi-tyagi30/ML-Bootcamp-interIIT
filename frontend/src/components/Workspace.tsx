@@ -39,14 +39,6 @@ export function Workspace({ api, jobId, record, audioUrl, error, theme, onTheme,
 
   const segments = useMemo(() => new Map<string, Segment>(raw.map((s) => [s.id, s])), [raw]);
 
-  // Coverage dimming: lines not cited by any summary or minutes sentence.
-  const cited = useMemo(() => {
-    if (!record.summary) return null;
-    const ids = new Set<string>();
-    record.summary.forEach((s) => s.evidence_segment_ids.forEach((i) => ids.add(i)));
-    record.minutes?.forEach((t) => t.points.forEach((p) => p.evidence_segment_ids.forEach((i) => ids.add(i))));
-    return ids;
-  }, [record]);
 
   const startOf = useCallback(
     (ids: string[]) => Math.min(...ids.map((i) => segments.get(i)?.start ?? Infinity)),
@@ -216,7 +208,6 @@ export function Workspace({ api, jobId, record, audioUrl, error, theme, onTheme,
           hasRefinement={!!record.refinement}
           mode={mode}
           onMode={setMode}
-          cited={cited}
           activeId={activeId}
           scrollTo={scrollTo}
           onSeek={(t) => audio.available && audio.playFrom(t)}

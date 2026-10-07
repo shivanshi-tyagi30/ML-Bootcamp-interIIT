@@ -12,7 +12,6 @@ interface Props {
   hasRefinement: boolean;
   mode: TranscriptMode;
   onMode: (m: TranscriptMode) => void;
-  cited: Set<string> | null; // null = no record yet, so no dimming
   activeId: string | null;
   scrollTo: { id: string; nonce: number } | null;
   onSeek: (t: number) => void;
@@ -90,14 +89,12 @@ const Row = memo(function Row({
   seg,
   pieces,
   mode,
-  dim,
   active,
   onSeek,
 }: {
   seg: Segment;
   pieces: Piece[];
   mode: TranscriptMode;
-  dim: boolean;
   active: boolean;
   onSeek: (t: number) => void;
 }) {
@@ -106,7 +103,6 @@ const Row = memo(function Row({
       className={cx(
         "grid grid-cols-[3.5rem_1fr] gap-x-3 border-l-2 px-4 py-2.5",
         active ? "border-accent bg-accent-soft/50" : "border-transparent",
-        dim && "opacity-55",
       )}
     >
       <button
@@ -129,7 +125,7 @@ const Row = memo(function Row({
   );
 });
 
-export function TranscriptPane({ raw, accepted, rejected, hasRefinement, mode, onMode, cited, activeId, scrollTo, onSeek }: Props) {
+export function TranscriptPane({ raw, accepted, rejected, hasRefinement, mode, onMode, activeId, scrollTo, onSeek }: Props) {
   const parent = useRef<HTMLDivElement>(null);
   const effectiveMode: TranscriptMode = hasRefinement ? mode : "raw";
 
@@ -209,7 +205,6 @@ export function TranscriptPane({ raw, accepted, rejected, hasRefinement, mode, o
                   seg={seg}
                   pieces={pieces[item.index]}
                   mode={effectiveMode}
-                  dim={!!cited && !cited.has(seg.id)}
                   active={seg.id === activeId}
                   onSeek={onSeek}
                 />
