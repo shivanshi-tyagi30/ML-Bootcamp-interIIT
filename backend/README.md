@@ -64,7 +64,7 @@ Agglomerative Clustering with cosine distance. Bursts under 1 s ("Yes.", "Agreed
 their own; they join the closest voice. Speakers with under 3 s of speech are merged into the nearest one. If you
 know how many people spoke, set `DIARIZATION_NUM_SPEAKERS` (most accurate); otherwise tune
 `ECAPA_DISTANCE_THRESHOLD` (higher = fewer speakers). Needs `speechbrain` and `scikit-learn`; the model (~80 MB)
-downloads once into `data/models/ecapa`. If diarization is off or unavailable, speakers are left empty, never
+is fetched into `data/models/ecapa` by `python -m app.prefetch`. If diarization is off or unavailable, speakers are left empty, never
 guessed. Alternatively, Pyannote can be enabled with `DIARIZATION_BACKEND=pyannote` and an `HF_TOKEN`.
 
 Place and institution names are corrected to their standard spelling ("Guhati" -> "Guwahati") when the new spelling
@@ -82,8 +82,7 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned   # once, if Activate.ps1 is
 .venv\Scripts\Activate.ps1
 pip install -r requirements-windows.txt
 copy .env.cpu .env
-ollama pull qwen3:8b
-ollama pull gemma3:12b
+python -m app.prefetch        # downloads every model once (Whisper, speaker model, both Ollama models)
 uvicorn app.main:app --port 8000
 ```
 
@@ -92,13 +91,27 @@ uvicorn app.main:app --port 8000
 | Setting | CPU profile | Why |
 |---|---|---|
 | Whisper | `large-v3-turbo`, int8, beam 1, all cores (`auto`) | about 6x faster than large-v3 on CPU, near-equal accuracy |
-| LM1 | `qwen3:8b`, thinking off | Qwen3 otherwise writes long hidden reasoning before every answer |
-| LM2 | `gemma3:12b`, `LM2_SCRATCHPAD=false` | about half the tokens to generate; the verifier still checks every item |
+| LM1 | `qwen3:4b`, thinking off | Qwen3 otherwise writes long hidden reasoning before every answer |
+| LM2 | `gemma3:4b`, `LM2_SCRATCHPAD=false` | small and fast on CPU; no scratchpad halves the output; the verifier still checks every item |
+| Loading | both models stay loaded (`LM1_UNLOAD_BEFORE_LM2=false`, `OLLAMA_KEEP_ALIVE=-1m`) | nothing reloads between steps or between users |
+| LM1 windows | `LM1_WINDOW_SEGMENTS=120` | a 5-10 minute meeting is refined in one call |
 | Context | `num_ctx` sized per call (8k/16k/32k) | Ollama's 2-4k default silently cut long prompts |
 | Re-check | off (NeMo does not install on Windows) | low-confidence words are marked disputed instead |
 
-On the first run Whisper downloads its model (about 1.6 GB for turbo); the progress line says so. Stage times are
-written to `data/jobs/{id}/timings.json`. For the fastest record use `LM2_MODEL=gemma3:4b` (lower quality).
+Stage times are written to `data/jobs/{id}/timings.json`. For more polished wording at roughly 2-3x the
+writing time, use `qwen3:8b` / `gemma3:12b` (and `LM1_UNLOAD_BEFORE_LM2=true` on 16 GB RAM).
+
+## Deploying (no user ever waits for a model)
+
+1. **At deploy time** run `python -m app.prefetch`. It downloads every model the server will use on that machine
+   (the Whisper size it picks for CPU or GPU, Silero VAD, the speaker model, both Ollama models) and exits with
+   status 1 if anything is missing. Run it in your image build or setup script, not at request time.
+2. **At startup** the server loads all of them into memory *before* it opens the port (`WARMUP_ON_START=true`),
+   using the same context size as real calls so Ollama never reloads. The log says
+   `all models loaded in N s; ready`, and `GET /api/health` returns `"ready": true`; point your platform's
+   health check at it.
+3. **While running** Ollama keeps both models loaded (`OLLAMA_KEEP_ALIVE=-1m`) and LM1 is not unloaded before
+   LM2, so every upload, including the first one after a quiet hour, starts with everything already in memory.
 
 ## Run
 

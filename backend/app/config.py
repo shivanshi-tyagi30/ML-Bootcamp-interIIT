@@ -54,8 +54,12 @@ class Settings(BaseSettings):
     LLM_TIMEOUT_SEC: int = 600
     LLM_MAX_RETRIES: int = 2
     LLM_MAX_CONTEXT: int = 32768  # largest context window requested from Ollama
-    OLLAMA_KEEP_ALIVE: str = "30m"  # keep models loaded between calls
-    LM2_SCRATCHPAD: bool = True  # false: LM2 reasons silently (about half the output, much faster on CPU)
+    OLLAMA_KEEP_ALIVE: str = "-1m"  # negative = keep models loaded forever, so no user waits for a reload
+    LM2_SCRATCHPAD: bool = True
+    # Load every model before the server accepts requests, so no user waits for loading.
+    WARMUP_ON_START: bool = True
+    # Free LM1's RAM before LM2 runs. Only for big models on a 16 GB laptop: LM1 must then reload for every job.
+    LM1_UNLOAD_BEFORE_LM2: bool = False  # false: LM2 reasons silently (about half the output, much faster on CPU)
 
     LM1_WINDOW_SEGMENTS: int = 40
     LM1_CONTEXT_SEGMENTS: int = 5

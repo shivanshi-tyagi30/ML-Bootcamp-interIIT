@@ -120,6 +120,24 @@ class LLMClient:
         data = r.json()
         return data.get("message", {}).get("content", ""), data.get("prompt_eval_count")
 
+    async def preload(self, model: str) -> bool:
+        """Load a model into Ollama's memory ahead of the first job; False if it could not be loaded."""
+        if self.backend != "ollama":
+            return True
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                r = await client.post(f"{self._url(model).removesuffix('/v1')}/api/generate",
+                                  json={"model": model, "keep_alive": self.keep_alive,
+                                        # same context as a short meeting's calls, so Ollama doesn't reload
+                                        "options": {"num_ctx": min(CONTEXT_BUCKETS[0], self.max_context)}})
+            if r.status_code >= 400:
+                raise RuntimeError(f"HTTP {r.status_code}")
+            log.info("preloaded %s", model)
+            return True
+        except Exception as e:  # noqa: BLE001
+            log.warning("could not preload %s (%r)", model, e)
+            return False
+
     async def unload(self, model: str) -> None:
         """Ask Ollama to free a model's memory now (best effort; frees RAM for the next model on a laptop)."""
         if self.backend != "ollama":

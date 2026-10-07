@@ -57,10 +57,12 @@ class WhisperSTT:
 
                 rt = self.rt
                 log.info("loading Whisper %s on %s (%s)", rt["model"], rt["device"], rt["compute_type"])
-                self._model = WhisperModel(
-                    str(rt["model"]), device=str(rt["device"]), compute_type=str(rt["compute_type"]),
-                    cpu_threads=int(rt["cpu_threads"]),
-                )
+                kw = dict(device=str(rt["device"]), compute_type=str(rt["compute_type"]),
+                          cpu_threads=int(rt["cpu_threads"]))
+                try:  # already fetched by `python -m app.prefetch`: no network round trip
+                    self._model = WhisperModel(str(rt["model"]), local_files_only=True, **kw)
+                except Exception:  # noqa: BLE001 - not cached yet
+                    self._model = WhisperModel(str(rt["model"]), **kw)
             return self._model
 
     def transcribe(
@@ -152,7 +154,7 @@ async def transcribe(ctx: "JobContext") -> None:
     stt = ctx.services.stt or default_stt(ctx.settings)
     prompt = glossary_prompt(ctx.upload.get("glossary", []))
     if not getattr(stt, "loaded", True):
-        await ctx.progress(0.0, "Loading the speech model (the first run downloads it, 1-3 GB)")
+        await ctx.progress(0.0, "Preparing the speech model")
     duration = float((ctx.read(ctx.output_name(Stage.NORMALIZING)) or {}).get("duration_s") or 0)
 
     def report(frac: float) -> None:

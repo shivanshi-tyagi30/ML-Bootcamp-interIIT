@@ -193,7 +193,7 @@ async def diarize(ctx: "JobContext") -> None:
         try:
             d = default_pyannote_diarizer(s)
             if not getattr(d, "loaded", True):
-                await ctx.progress(0.0, "Loading pyannote speaker model (first run downloads it)")
+                await ctx.progress(0.0, "Preparing the speaker model")
             turns = relabel(await asyncio.to_thread(d.run, str(ctx.wav_path)))
             ctx.write(out_name, {"skipped": False, "model": d.name, "turns": turns})
             return
@@ -208,7 +208,7 @@ async def diarize(ctx: "JobContext") -> None:
         whisper_segments = whisper_data.get("segments", [])
         ecapa = default_ecapa_diarizer(s)
         if not getattr(ecapa, "loaded", True):
-            await ctx.progress(0.0, "Loading the speaker model (the first run downloads about 80 MB)")
+            await ctx.progress(0.0, "Preparing the speaker model")
         else:
             await ctx.progress(0.0, "Telling speakers apart")
         raw_turns = await asyncio.to_thread(ecapa.run, str(ctx.wav_path), whisper_segments, ctx.cancel_requested)

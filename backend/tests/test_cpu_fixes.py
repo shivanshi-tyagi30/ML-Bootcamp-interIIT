@@ -238,3 +238,78 @@ def test_verifier_borrows_only_from_neighbouring_lines(settings):
                 models={}, generated_at="2026-01-01T00:00:00Z")
     rec = verify(lm2, segs, segs, Refinement(), meta, settings, diarization_on=False)
     assert [(s.text[:11], s.evidence_segment_ids) for s in rec.summary] == [("The kernels", ["S001", "S002"])]
+
+
+def test_warmup_preloads_models_with_the_calls_context(monkeypatch, settings):
+    import json
+
+    import httpx
+
+    from app import main
+    from app.pipeline.runner import Services
+    from tests.conftest import FakeLLM, FakeSTT
+
+    seen = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(req.content))
+        return httpx.Response(200, json={})
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    s = settings.model_copy(update={"LM1_MODEL": "qwen3:4b", "LM2_MODEL": "gemma3:4b"})
+    asyncio.run(main.warmup(s, Services(stt=FakeSTT())))
+    assert [b["model"] for b in seen] == ["qwen3:4b", "gemma3:4b"]
+    assert all(b["options"]["num_ctx"] == 8192 and b["keep_alive"] == s.OLLAMA_KEEP_ALIVE for b in seen)
+    seen.clear()
+    asyncio.run(main.warmup(s, Services(stt=FakeSTT(), llm=FakeLLM())))  # injected LLM: nothing to preload
+    assert seen == []
+
+
+def test_server_is_ready_only_after_warmup(monkeypatch, settings):
+    from app import main
+
+    order = []
+
+    async def fake_warmup(s, services):
+        order.append("warmup")
+        return []
+
+    monkeypatch.setattr(main, "warmup", fake_warmup)
+    s = settings.model_copy(update={"WARMUP_ON_START": True})
+    with TestClient(main.create_app(settings=s)) as c:
+        order.append("serving")
+        assert c.get("/api/health").json()["ready"] is True
+    assert order == ["warmup", "serving"]
+
+    async def failing_warmup(s, services):
+        return ["Whisper"]
+
+    monkeypatch.setattr(main, "warmup", failing_warmup)
+    with TestClient(main.create_app(settings=s)) as c:
+        h = c.get("/api/health").json()
+    assert h["ready"] is False and h["not_loaded"] == ["Whisper"]
+
+
+def test_prefetch_pulls_both_ollama_models(monkeypatch, settings):
+    import json
+
+    import httpx
+
+    from app import prefetch
+
+    seen = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append((req.url.path, json.loads(req.content)))
+        return httpx.Response(200, json={"status": "success"})
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    s = settings.model_copy(update={"LM1_MODEL": "qwen3:4b", "LM2_MODEL": "gemma3:4b"})
+    monkeypatch.setattr(prefetch, "get_settings", lambda: s)
+    monkeypatch.setattr(prefetch, "fetch_whisper", lambda s: None)
+    monkeypatch.setattr(prefetch, "fetch_silero", lambda: None)
+    assert prefetch.main() == 0
+    assert seen == [("/api/pull", {"model": "qwen3:4b", "stream": False}),
+                    ("/api/pull", {"model": "gemma3:4b", "stream": False})]
