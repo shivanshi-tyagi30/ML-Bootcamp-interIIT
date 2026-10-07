@@ -86,7 +86,8 @@ def test_stage_labels_reach_the_transcript(settings, fixtures_dir, monkeypatch):
     row, d = asyncio.run(go())
     assert row["status"] == "completed", row
     speakers = [x["speaker"] for x in read_json(d / "raw_transcript.json")]
-    assert set(speakers) == {"Speaker 1", "Speaker 2"} and speakers[0] == "Speaker 1"
+    # The first voice says "this is Priya", so it is named; the other keeps its label.
+    assert set(speakers) == {"Priya", "Speaker 2"} and speakers[0] == "Priya"
     assert read_json(d / "record.json")["meta"]["models"]["diarization"] == "ECAPA-TDNN (fake)"
 
 

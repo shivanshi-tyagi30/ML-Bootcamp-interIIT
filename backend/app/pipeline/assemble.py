@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 from app.core.stages import Stage
 from app.models.record import Segment, Word
 from app.pipeline.recheck import flatten_words
+from app.pipeline.speaker_names import apply_speaker_names, find_speaker_names
 
 if TYPE_CHECKING:
     from app.pipeline.runner import JobContext
@@ -87,4 +88,11 @@ async def assemble_raw(ctx: "JobContext") -> None:
     recheck = ctx.read(ctx.output_name(Stage.RECHECKING)) or {}
     diar = ctx.read(ctx.output_name(Stage.DIARIZING)) or {}
     segs = assemble_segments(whisper["segments"], recheck.get("word_updates", {}), diar.get("turns", []))
+    if ctx.settings.SPEAKER_NAMES_FROM_TRANSCRIPT:
+        # "Hello Prachi, I am Shivanshi" -> Speaker 1 becomes Shivanshi everywhere (evidence kept on disk).
+        names = find_speaker_names(segs)
+        if names:
+            segs = apply_speaker_names(segs, names)
+            ctx.log.info("speaker names: %s", {k: v["name"] for k, v in names.items()})
+        ctx.write("speaker_names.json", names)
     ctx.write(ctx.output_name(Stage.RAW_SAVED), [s.model_dump(mode="json") for s in segs])

@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     DIARIZATION_BACKEND: Literal["auto", "ecapa", "pyannote"] = "auto"
     ECAPA_MODEL: str = "speechbrain/spkrec-ecapa-voxceleb"
     ECAPA_DISTANCE_THRESHOLD: float = 0.6  # higher = fewer speakers; ignored when DIARIZATION_NUM_SPEAKERS is set
+    # Rename "Speaker N" to a name the meeting itself states ("I am Shivanshi", "Hello Prachi" + reply).
+    SPEAKER_NAMES_FROM_TRANSCRIPT: bool = True
     DIARIZATION_NUM_SPEAKERS: int = 0  # 0 = detect; set it when you know how many people spoke (most accurate)
     HF_TOKEN: str = ""
 
