@@ -81,8 +81,15 @@ async def refine(ctx: "JobContext") -> None:
                 ctx.settings.LLM_MAX_RETRIES, max_tokens=max_tokens, job_id=ctx.job_id, on_retry=on_retry,
             )
         except (InvalidModelOutput, LLMUnavailable) as e:
+            if getattr(ctx, "cloud", False):
+                ctx.log.warning("LM1 refinement window %d skipped (%s); keeping raw text", k + 1, e)
+                ctx.warnings.append(f"Terminology refinement skipped for window {k + 1}")
+                continue
             raise PipelineError("E_LM1_FAILED", Stage.REFINING, f"window {k + 1}: {e}") from e
         except Exception as e:  # noqa: BLE001 - connection errors etc.
+            if getattr(ctx, "cloud", False):
+                ctx.log.warning("LM1 refinement window %d failed (%r); keeping raw text", k + 1, e)
+                continue
             raise PipelineError("E_LM1_FAILED", Stage.REFINING, repr(e)) from e
         domains.append(out.domain_guess)
         for e in out.edits:
