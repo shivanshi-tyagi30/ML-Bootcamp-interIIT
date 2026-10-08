@@ -176,3 +176,36 @@ def test_record_names_the_cloud_model(settings, fixtures_dir, monkeypatch):
     assert row["status"] == "completed", row
     models = read_json(d / "record.json")["meta"]["models"]
     assert models["lm1"] == models["lm2"] == "gemini-2.5-flash (cloud)"
+
+
+def test_retired_model_is_replaced_by_the_newest_flash_model(monkeypatch):
+    models = {"data": [{"id": m} for m in [
+        "models/gemini-2.0-flash", "models/gemini-3.0-flash", "models/gemini-3.0-flash-lite",
+        "models/gemini-3.0-pro", "models/gemini-3.1-flash-preview-09-2026", "models/text-embedding-004",
+        "models/gemini-3.0-flash-image"]]}
+    seen = []
+
+    def handler(req):
+        if req.method == "GET":
+            return httpx.Response(200, json=models)
+        body = json.loads(req.content)
+        seen.append(body["model"])
+        if body["model"] == "gemini-2.5-flash":
+            return httpx.Response(404, json={"error": {"message": "models/gemini-2.5-flash is not found"}})
+        return reply(json.dumps(GOOD))
+
+    mock(monkeypatch, handler)
+    client = GeminiClient("key", "gemini-2.5-flash")
+    assert run(client).domain == "ml"
+    assert seen == ["gemini-2.5-flash", "gemini-3.0-flash"] and client.model == "gemini-3.0-flash"
+
+
+def test_unknown_model_without_alternatives_lists_what_the_key_can_use(monkeypatch):
+    def handler(req):
+        if req.method == "GET":
+            return httpx.Response(200, json={"data": [{"id": "models/text-embedding-004"}]})
+        return httpx.Response(404, text="not found")
+
+    mock(monkeypatch, handler)
+    with pytest.raises(LLMUnavailable, match="text-embedding-004"):
+        run(GeminiClient("key", "gemini-2.5-flash"))
