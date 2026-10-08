@@ -215,11 +215,6 @@ export function UploadScreen({ error, busy, mock, theme, onTheme, api, onStart, 
           </div>
         </section>
       </main>
-
-      <footer className="relative z-10 flex flex-wrap items-center justify-between gap-2 border-t border-line px-5 py-3 font-mono text-[10.5px] tracking-[0.12em] text-ink-3 sm:px-10">
-        <span>INTER IIT TECH MEET 15.0 · ML PROBLEM STATEMENT</span>
-        <span>SPEECH → REFINE → RECORD</span>
-      </footer>
     </div>
   );
 }
