@@ -68,7 +68,7 @@ async def refine(ctx: "JobContext") -> None:
     edits: list[dict[str, Any]] = []
     domains: list[str] = []
     for k, win in enumerate(wins):
-        label = f"Refining terminology (window {k + 1} of {len(wins)})"
+        label = f"Refining terminology with {getattr(ctx.llm, 'name', ctx.settings.LM1_MODEL)} (window {k + 1} of {len(wins)})"
         await ctx.progress(k / max(1, len(wins)), label)
         target_ids = {segs[i]["id"] for i in win[1]}
 

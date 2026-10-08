@@ -86,8 +86,10 @@ def merge_outputs(parts: list[LM2Record]) -> LM2Output:
             else:
                 topics[key] = t.model_copy(deep=True)
     speakers = list({(sp.label, sp.name.lower()): sp for p in parts for sp in p.speakers}.values())
+    fixes = list({f.segment_id: f for p in parts for f in p.speaker_fixes}.values())
     return LM2Output(
         speakers=speakers,
+        speaker_fixes=fixes,
         summary=[s for p in parts for s in p.summary],
         minutes=list(topics.values()),
         decisions=_dedupe([d for p in parts for d in p.decisions], lambda x: x.decision, lambda x: x.evidence_segment_ids),
@@ -129,7 +131,7 @@ async def document(ctx: "JobContext") -> None:
         max_input = CLOUD_LM2_INPUT_TOKENS if getattr(ctx, "cloud", False) else s.LM2_MAX_INPUT_TOKENS
         budget = max_input - estimate_tokens(system) - 2000
         if estimate_tokens("\n".join(lines)) <= budget:
-            await ctx.progress(0.1, f"Writing the meeting record with {s.LM2_MODEL}")
+            await ctx.progress(0.1, f"Writing the meeting record with {getattr(ctx.llm, 'name', s.LM2_MODEL)}")
             out = await call(user_message(lines, record_schema, candidates))
             mode = "single"
         else:

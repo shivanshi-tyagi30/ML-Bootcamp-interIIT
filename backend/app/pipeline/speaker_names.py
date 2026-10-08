@@ -238,3 +238,29 @@ def rename_in_text(text: str, names: dict[str, dict[str, Any]]) -> str:
     for label, v in names.items():
         text = re.sub(r"\b" + re.escape(label) + r"\b", v["name"], text)
     return text
+
+
+FIX_MAX_WORDS = 6  # only short replies may be moved to another speaker
+FIX_MAX_SHARE = 0.2  # never move more than this share of the lines
+
+
+def verify_speaker_fixes(proposed: list[Any], segments: list[Segment]) -> dict[str, str]:
+    """{segment_id: new speaker} for LM2's label fixes that pass the checks.
+
+    Only short lines (<= FIX_MAX_WORDS words), only to a speaker who already exists in the meeting, never to
+    the speaker the line already has, and at most FIX_MAX_SHARE of all lines. The voice model's labels for
+    longer lines are never overridden by a language model.
+    """
+    by_id = {s.id: s for s in segments}
+    speakers = {s.speaker for s in segments if s.speaker}
+    out: dict[str, str] = {}
+    for p in proposed:
+        seg = by_id.get(getattr(p, "segment_id", ""))
+        target = (getattr(p, "speaker", "") or "").strip()
+        if (seg is None or not seg.speaker or target not in speakers or target == seg.speaker
+                or len(seg.text.split()) > FIX_MAX_WORDS):
+            continue
+        out[seg.id] = target
+    if len(out) > max(1, int(len(segments) * FIX_MAX_SHARE)):
+        return {}  # the model is re-labelling the meeting rather than fixing slips: ignore it
+    return out

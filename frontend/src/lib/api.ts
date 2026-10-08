@@ -239,7 +239,16 @@ const httpApi: Api = {
   },
 
   retryJob(jobId) {
-    return request<JobSummary>(`/jobs/${jobId}/retry`, { method: "POST" });
+    // Send the saved cloud API key again: the server keeps keys in memory only, so after a restart a
+    // retry would otherwise fall back to the local model.
+    const form = new FormData();
+    try {
+      const key = localStorage.getItem("trace_api_key")?.trim();
+      if (key) form.append("api_key", key);
+    } catch {
+      /* storage unavailable */
+    }
+    return request<JobSummary>(`/jobs/${jobId}/retry`, { method: "POST", body: form });
   },
 
   async health() {
