@@ -7,10 +7,12 @@ import logging
 import time
 import shutil
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.api import routes_exports, routes_jobs
 from app.api.deps import AppState, Runner
@@ -75,7 +77,9 @@ async def warmup(settings: Settings, services: Services) -> list[str]:
     if services.llm is None:
         client = LLMClient(settings.LLM_BASE_URL, settings.LLM_BACKEND, settings.LLM_TIMEOUT_SEC,
                            keep_alive=settings.OLLAMA_KEEP_ALIVE)
-        for m in dict.fromkeys([settings.LM1_MODEL, settings.LM2_MODEL]):
+        # One-model-at-a-time mode: only LM1 (used first in every job) is preloaded; LM2 loads when needed.
+        models = [settings.LM1_MODEL] if settings.LM1_UNLOAD_BEFORE_LM2 else [settings.LM1_MODEL, settings.LM2_MODEL]
+        for m in dict.fromkeys(models):
             if not await client.preload(m):
                 failed.append(m)
     return failed
@@ -163,7 +167,19 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
             "gpu": gpu,
         }
 
+    if settings.SERVE_FRONTEND:
+        mount_frontend(app, settings.FRONTEND_DIST)
     return app
+
+
+def mount_frontend(app: FastAPI, dist: Path) -> None:
+    """Serve the built single-page frontend at / (API routes registered earlier take precedence)."""
+    log = logging.getLogger(__name__)
+    if not (dist / "index.html").exists():
+        log.warning("SERVE_FRONTEND is on but %s has no index.html; run `npm run build` in frontend/", dist)
+        return
+    app.mount("/", StaticFiles(directory=dist, html=True), name="frontend")
+    log.info("serving the website from %s", dist)
 
 
 app = create_app()

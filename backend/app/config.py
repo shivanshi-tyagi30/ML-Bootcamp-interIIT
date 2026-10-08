@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
 
     DATA_DIR: Path = Path("./data")
+    # Serve the built frontend (frontend/dist) from this server too, so one URL serves the page and the API
+    # (used on Colab and single-machine deployments; local development uses the Vite dev server instead).
+    SERVE_FRONTEND: bool = False
+    FRONTEND_DIST: Path = Path(__file__).resolve().parents[2] / "frontend" / "dist"
     MAX_FILE_MB: int = 200
     MAX_DURATION_MIN: int = 120
     MIN_SPEECH_SEC: float = 2.0
