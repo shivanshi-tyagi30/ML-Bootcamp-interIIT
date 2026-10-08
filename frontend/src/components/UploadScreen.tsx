@@ -90,9 +90,7 @@ export function UploadScreen({ error, busy, mock, theme, onTheme, api, onStart, 
           </h1>
 
           <p className="mt-6 max-w-[520px] text-[16px] leading-relaxed text-ink-2">
-            Drop in a recording. Trace writes down what was said, fixes the jargon it misheard, and pulls out the
-            decisions and to-dos, each linked to the moment it was said. If nobody named an owner, we won't make one
-            up.
+            Drop in any meeting recording. Trace transcribes what was said, corrects misheard technical terms, and extracts action items with exact time-linked audio proof. No made-up owners or imagined deadlines.
           </p>
 
           <div className="mt-8 max-w-[560px] border border-ink bg-surface shadow-[8px_8px_0_var(--color-accent)]">
@@ -206,7 +204,7 @@ export function UploadScreen({ error, busy, mock, theme, onTheme, api, onStart, 
 
         <section className="relative hidden h-[560px] lg:block" aria-label="How Trace links a record to the recording">
           <div className="halftone absolute top-[40px] left-[26%] size-[430px] rounded-full" />
-          <div className="absolute top-[150px] left-[-2%] origin-top-left scale-[0.98] xl:scale-[1.05]">
+          <div className="absolute top-[110px] left-[-2%] origin-top-left scale-[0.98] xl:scale-[1.05]">
             <HeroIllustration />
           </div>
           <div className="absolute right-0 bottom-0 flex flex-col items-end gap-6">
