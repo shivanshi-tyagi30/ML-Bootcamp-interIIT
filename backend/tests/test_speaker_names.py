@@ -86,3 +86,31 @@ def test_pipeline_uses_names_in_transcript_and_record(settings, fixtures_dir, mo
     assert read_json(d / "speaker_names.json")["Speaker 1"]["evidence"][0]["segment_id"] == "S001"
     rec = read_json(d / "record.json")
     assert rec["raw_transcript"][0]["speaker"] == "Priya"
+
+
+@pytest.mark.parametrize("text", [
+    "Thanks, can you share the screen?", "Hi, can you hear me?", "Okay can we start?", "Thanks, could you check?",
+    "Hello, should we begin?", "Hi, please go ahead.", "Thank you, will do.",
+])
+def test_helper_verbs_after_a_greeting_are_never_names(text):
+    from app.pipeline.speaker_names import ADDRESS, _find
+
+    assert _find(ADDRESS, text) == []
+
+
+def test_real_meeting_lines_name_both_speakers():
+    lines = [
+        ("Speaker 1", "Hi Prachi, let's finalize our online Python workshop for the 12th of October."),
+        ("Speaker 1", "We need to confirm the content, registrations and deadlines."),
+        ("Speaker 2", "We have registrations from Goa, Bangalore and Kozhikode."),
+        ("Speaker 1", "Thanks, can you share the list?"),
+        ("Speaker 2", "Sure."),
+        ("Speaker 2", "Shivanshi, should we include TensorFlow as well?"),
+        ("Speaker 1", "Let's leave TensorFlow for a later workshop."),
+    ]
+    assert names(lines) == {"Speaker 1": "Shivanshi", "Speaker 2": "Prachi"}
+
+
+def test_lowercase_name_only_from_a_self_introduction():
+    assert names([("Speaker 1", "my name is shivanshi"), ("Speaker 2", "okay")]) == {"Speaker 1": "Shivanshi"}
+    assert names([("Speaker 1", "thanks, okay then"), ("Speaker 2", "sure")]) == {}

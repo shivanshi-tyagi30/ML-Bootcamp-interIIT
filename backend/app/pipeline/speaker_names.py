@@ -33,7 +33,8 @@ SELF_INTRO = [
 ADDRESS = [
     re.compile(r"\b(?:hi|hello|hey|thanks|thank you|welcome|morning|good morning|bye|goodbye),?\s+"
                + NAME + r"\b(?!')"),
-    re.compile(r"(?:^|[.!?]\s+)" + NAME + r",?\s+(?:can|could|will|would|do|did|are|what|how|please|you|go ahead|take over|take it)\b"),
+    re.compile(r"(?:^|[.!?]\s+)" + NAME + r",?\s+(?:can|could|will|would|should|shall|do|did|does|have|has|are|is|"
+               r"what|how|why|when|where|which|please|you|any|tell|let's|go ahead|take over|take it)\b"),
     re.compile(r"\b(?:over to|pass to|hand over to|handing over to|let's hear from|asking|invite|welcome)\s+"
                + NAME + r"\b(?!')"),
     re.compile(r"\b(?:what do you think|your thoughts|what's your take|are you there|you agree|right)[, ]+"
@@ -56,6 +57,15 @@ NOT_NAMES = {
     "thinking", "tired", "up", "what", "where", "who", "why", "how", "when", "one", "two", "three", "currently",
     "actually", "basically", "definitely", "probably", "hearing", "unable", "muted", "audible", "visible", "late",
     "everything", "nothing", "something", "anything", "someone", "anyone", "no", "hi", "hello", "hey",
+    # Modal and helper verbs, pronouns and fillers that follow "Thanks," / "Hi," at the start of a question
+    # ("Thanks, can you share the screen?") and must never be read as a name.
+    "can", "could", "would", "should", "shall", "will", "might", "must", "do", "does", "did", "have", "has",
+    "had", "please", "kindly", "maybe", "again", "everyone's", "me", "my", "your", "our", "us", "he", "she",
+    "they", "them", "his", "her", "their", "its", "these", "those", "any", "some", "each", "every", "anyway",
+    "though", "once", "first", "last", "finally", "quick", "quickly", "much", "lot", "guys", "ji", "bhai",
+    "didi", "yaar", "dear", "buddy", "man", "boss", "mam", "ma'am", "welcome", "bye", "goodbye", "morning",
+    "evening", "afternoon", "night", "noon", "thank", "listen", "look", "see", "wait", "excuse", "hold", "come",
+    "tell", "let's", "lets", "hmm", "um", "uh", "oh", "ah", "alright",
 }
 
 # Lower-case words that follow "I am" but describe a state, not a name ("i am going", "i'm tired").
@@ -81,8 +91,14 @@ def _clean(name: str) -> str | None:
     return full
 
 
-def _find(patterns: list[re.Pattern[str]], text: str) -> list[str]:
-    """Names matched by any pattern (case-insensitive lead words, capitalized names)."""
+def _find(patterns: list[re.Pattern[str]], text: str, allow_lower: bool | None = None) -> list[str]:
+    """Names matched by any pattern (case-insensitive lead words, capitalized names).
+
+    Lower-case candidates are accepted only for self-introductions ("my name is shivanshi"); after a
+    greeting a lower-case word is almost always an ordinary word ("thanks, can you...").
+    """
+    if allow_lower is None:
+        allow_lower = patterns is SELF_INTRO
     out = []
     for p in patterns:
         for m in re.finditer(p.pattern, text, flags=re.I):  # lead words in any case ("Hello", "hello")
@@ -91,7 +107,7 @@ def _find(patterns: list[re.Pattern[str]], text: str) -> list[str]:
             parts = m.group(1).split()
             if parts[0][0].isupper():
                 words = [parts[0]] + ([parts[1]] if len(parts) > 1 and parts[1][0].isupper() else [])
-            elif NOT_NAME_SUFFIX.search(parts[0].lower()) or len(parts[0]) < 3:
+            elif not allow_lower or NOT_NAME_SUFFIX.search(parts[0].lower()) or len(parts[0]) < 3:
                 words = []
             else:
                 words = [parts[0]]
@@ -103,17 +119,21 @@ def _find(patterns: list[re.Pattern[str]], text: str) -> list[str]:
 
 def find_speaker_names(segments: list[Segment]) -> dict[str, dict[str, Any]]:
     """{"Speaker 1": {"name": "Shivanshi", "evidence": [{"segment_id", "kind", "text"}]}} for named speakers."""
+    # Lower-case names after greetings are trusted only when the transcript itself is lower-case (no
+    # capitals at line starts); in a normally capitalized transcript a lower-case word there is not a name.
+    starts = [t[0] for t in (s.text.strip() for s in segments) if t and t[0].isalpha()]
+    lower_transcript = bool(starts) and sum(c.islower() for c in starts) / len(starts) > 0.5
     votes: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
     proof: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
     for i, s in enumerate(segments):
         if not s.speaker:
             continue
         own = set()
-        for name in _find(SELF_INTRO, s.text):
+        for name in dict.fromkeys(_find(SELF_INTRO, s.text)):  # one vote per line, however many rules match
             own.add(name)
             votes[s.speaker][name] += SELF_WEIGHT
             proof[(s.speaker, name)].append({"segment_id": s.id, "kind": "self_introduction", "text": s.text})
-        for name in _find(ADDRESS, s.text):
+        for name in dict.fromkeys(_find(ADDRESS, s.text, allow_lower=lower_transcript)):
             if name in own:
                 continue
             reply = next((n for n in segments[i + 1 : i + 1 + REPLY_WINDOW]
@@ -127,8 +147,8 @@ def find_speaker_names(segments: list[Segment]) -> dict[str, dict[str, Any]]:
     # Mutual greeting check: if segment i addresses Person A and segment i+1 addresses Person B
     for i in range(len(segments) - 1):
         s1, s2 = segments[i], segments[i + 1]
-        a1 = _find(ADDRESS, s1.text)
-        a2 = _find(ADDRESS, s2.text)
+        a1 = _find(ADDRESS, s1.text, allow_lower=lower_transcript)
+        a2 = _find(ADDRESS, s2.text, allow_lower=lower_transcript)
         if a1 and a2 and a1[0].lower() != a2[0].lower():
             name_a, name_b = a1[0], a2[0]
             spk1 = s1.speaker if (s1.speaker and s1.speaker != s2.speaker) else "Speaker 1"
