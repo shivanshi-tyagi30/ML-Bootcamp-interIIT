@@ -18,6 +18,8 @@ export interface Api {
   getJob(jobId: string): Promise<JobState>;
   listJobs(): Promise<JobSummary[]>;
   renameJob(jobId: string, title: string): Promise<JobSummary>;
+  /** Save hand corrections so a reload and every download show them. */
+  saveEdits(jobId: string, edits: RecordEdits): Promise<void>;
   deleteJob(jobId: string): Promise<void>;
   /** Stop a queued or running job; finished steps stay saved. */
   cancelJob(jobId: string): Promise<JobSummary>;
@@ -30,6 +32,12 @@ export interface Api {
   /** Seekable original recording served by the backend, or null. */
   audioUrl(jobId: string): string | null;
 }
+
+/** The parts of a record the user can correct by hand. */
+export type RecordEdits = Pick<
+  PartialRecord,
+  "raw_transcript" | "refined_transcript" | "summary" | "minutes" | "decisions" | "open_proposals" | "action_items"
+>;
 
 export class ApiError extends Error {
   constructor(public jobError: JobError) {
@@ -220,6 +228,14 @@ const httpApi: Api = {
 
   async listJobs() {
     return (await request<{ items: JobSummary[] }>(`/jobs?limit=50`)).items;
+  },
+
+  async saveEdits(jobId, edits) {
+    await request<void>(`/jobs/${jobId}/edits`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(edits),
+    });
   },
 
   renameJob(jobId, title) {
@@ -434,6 +450,10 @@ const mockApi: Api = {
 
   async listJobs() {
     return [...mockJobs.values()].map((j) => j.summary).reverse();
+  },
+
+  async saveEdits() {
+    // Mock mode builds downloads in the browser from the edited record itself.
   },
 
   async renameJob(jobId, title) {

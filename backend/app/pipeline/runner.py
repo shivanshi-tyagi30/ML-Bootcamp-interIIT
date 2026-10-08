@@ -320,6 +320,35 @@ def rename_record(jobs_dir: Path, job_id: str, title: str) -> bool:
     return True
 
 
+EDITED_TRANSCRIPTS = {"raw_transcript": "raw_transcript.edited.json",
+                      "refined_transcript": "refined_transcript.edited.json"}
+
+
+def save_edits(jobs_dir: Path, job_id: str, edits: dict[str, Any]) -> bool:
+    """Store the user's hand corrections and regenerate every export from them.
+
+    With a record: the record is updated (the untouched original is kept once as record.original.json) and
+    exports are rebuilt. Without one (writing the record failed): the corrected transcripts are kept next to
+    the pipeline's own files, which stay untouched so Retry still resumes correctly. False: nothing to save.
+    """
+    d = job_dir(jobs_dir, job_id)
+    edits = {k: v for k, v in edits.items() if v is not None}
+    if not edits:
+        return False
+    data = read_json(d / STAGE_OUTPUT[Stage.VERIFYING])
+    if data is None:
+        for key, name in EDITED_TRANSCRIPTS.items():
+            if key in edits:
+                write_json(d / name, edits[key])
+        return any(k in edits for k in EDITED_TRANSCRIPTS)
+    if not (d / "record.original.json").exists():
+        write_json(d / "record.original.json", data)
+    rec = MeetingRecord(**{**data, **edits})
+    write_json(d / STAGE_OUTPUT[Stage.VERIFYING], rec)
+    render_exports(rec, d / "exports")
+    return True
+
+
 def dump_event(event: dict[str, Any]) -> str:
     """Serialize an event for SSE."""
     return json.dumps(event, ensure_ascii=False)

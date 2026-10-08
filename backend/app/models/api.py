@@ -6,7 +6,9 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from app.models.record import MeetingRecord, Refinement, Segment
+from app.models.record import (
+    ActionItem, CitedSentence, Decision, MeetingRecord, MinutesTopic, Proposal, Refinement, Segment,
+)
 
 
 class JobSummary(BaseModel):
@@ -62,6 +64,18 @@ class JobDetail(BaseModel):
     record: MeetingRecord | None = None
     partial: PartialResults
     timings: dict[str, float] | None = None  # seconds per stage, from timings.json
+
+
+class EditsRequest(BaseModel):
+    """Body of PUT /api/jobs/{id}/edits: the parts of the record the user corrected by hand."""
+
+    raw_transcript: list[Segment] | None = None
+    refined_transcript: list[Segment] | None = None
+    summary: list[CitedSentence] | None = None
+    minutes: list[MinutesTopic] | None = None
+    decisions: list[Decision] | None = None
+    open_proposals: list[Proposal] | None = None
+    action_items: list[ActionItem] | None = None
 
 
 class RenameRequest(BaseModel):
