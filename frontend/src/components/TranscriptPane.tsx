@@ -111,10 +111,18 @@ function EditableWord({
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(word);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setDraft(word);
   }, [word]);
+
+  useEffect(() => {
+    if (editing) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [editing]);
 
   const commit = () => {
     const trimmed = draft.trim();
@@ -134,12 +142,7 @@ function EditableWord({
   if (editing) {
     return (
       <input
-        ref={(el) => {
-          if (el) {
-            el.focus();
-            el.select();
-          }
-        }}
+        ref={inputRef}
         type="text"
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
