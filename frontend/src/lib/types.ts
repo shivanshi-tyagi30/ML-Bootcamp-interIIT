@@ -60,7 +60,8 @@ export type VerifierFlag =
   | "deadline_downgraded"
   | "pointer_invalid"
   | "audio_unclear"
-  | "self_assignment_unverified";
+  | "self_assignment_unverified"
+  | "owner_from_speaker";
 
 export interface ActionItem {
   id: string;

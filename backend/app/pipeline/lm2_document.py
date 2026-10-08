@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 from rapidfuzz import fuzz
@@ -12,6 +13,8 @@ from app.core.text import estimate_tokens
 from app.llm.client import LLMUnavailable, load_prompt
 from app.llm.json_repair import InvalidModelOutput
 from app.models.llm_io import LM2Output, LM2Record, LM2Topic, SummaryPick
+from app.models.record import Segment
+from app.pipeline.candidates import checklist, find_candidates
 from app.pipeline.lm1_vocabulary import chunk_lines, make_room_for, transcript_lines
 
 if TYPE_CHECKING:
@@ -33,13 +36,16 @@ REMINDER = (
 )
 
 
-def user_message(lines: list[str], schema_model: type = LM2Output) -> str:
-    """Transcript plus a closing reminder (small models follow the end of the prompt best).
+def user_message(lines: list[str], schema_model: type = LM2Output, candidates: list[dict[str, Any]] | None = None,
+                 ) -> str:
+    """Transcript, the keyword CHECKLIST for these lines, and a closing reminder (small models follow the end
+    of the prompt best).
 
     The JSON schema is not repeated here: Ollama and vLLM already enforce it through constrained
     decoding, and sending it as text cost ~1.5k extra prompt tokens on every call.
     """
-    return "TRANSCRIPT\n" + "\n".join(lines) + REMINDER
+    ids = {m.group(1) for ln in lines if (m := re.match(r"\[(S\d+)\]", ln))}
+    return "TRANSCRIPT\n" + "\n".join(lines) + checklist(candidates or [], ids) + REMINDER
 
 
 def overlapping_chunks(lines: list[str], max_tokens: int) -> list[list[str]]:
@@ -94,6 +100,7 @@ async def document(ctx: "JobContext") -> None:
     s = ctx.settings
     refined = ctx.read("refined_transcript.json")
     lines = transcript_lines(refined, with_speaker=True)
+    candidates = find_candidates([Segment(**x) for x in refined])
     system = load_prompt("lm2_document")
     record_schema = LM2Output if s.LM2_SCRATCHPAD else LM2Record
     if not s.LM2_SCRATCHPAD:
@@ -118,14 +125,14 @@ async def document(ctx: "JobContext") -> None:
         budget = s.LM2_MAX_INPUT_TOKENS - estimate_tokens(system) - 2000
         if estimate_tokens("\n".join(lines)) <= budget:
             await ctx.progress(0.1, f"Writing the meeting record with {s.LM2_MODEL}")
-            out = await call(user_message(lines, record_schema))
+            out = await call(user_message(lines, record_schema, candidates))
             mode = "single"
         else:
             chunks = overlapping_chunks(lines, budget)
             parts = []
             for i, chunk in enumerate(chunks):
                 await ctx.progress(i / (len(chunks) + 1), f"Writing the meeting record (part {i + 1} of {len(chunks)})")
-                parts.append(await call(user_message(chunk, record_schema)))
+                parts.append(await call(user_message(chunk, record_schema, candidates)))
             out = merge_outputs(parts)
             out.summary = await pick_summary(ctx, call, out)
             mode = f"chunked:{len(chunks)}"

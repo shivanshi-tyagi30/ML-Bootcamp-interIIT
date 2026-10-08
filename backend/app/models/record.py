@@ -16,6 +16,7 @@ RejectReason = Literal[
 ]
 VerifierFlag = Literal[
     "owner_downgraded", "deadline_downgraded", "pointer_invalid", "audio_unclear", "self_assignment_unverified",
+    "owner_from_speaker",
 ]
 
 

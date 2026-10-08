@@ -17,6 +17,7 @@ from app.models.record import (
     UNSPECIFIED, ActionItem, CitedSentence, Decision, Fidelity, MeetingRecord, Meta, MinutesTopic, Pointer,
     Proposal, Refinement, Segment,
 )
+from app.pipeline.candidates import FIRST_PERSON_COMMIT, PROPOSAL_CUE, REQUEST, TASK_CUE, is_agreeing_reply
 from app.pipeline.fidelity import compute_fidelity
 from app.pipeline.guard import _word_spans
 
@@ -24,8 +25,9 @@ if TYPE_CHECKING:
     from app.pipeline.runner import JobContext
 
 AGREEMENT_CUE = re.compile(
-    r"\b(?:agree|agreed|decided|decision|final|let's go|go with|we will|we'll|approved|confirmed|settled|"
-    r"done deal|sounds good|yes,? let's)\b", re.I,
+    r"\b(?:agree|agreed|decided|decision|final|finali[sz]e[d]?|let's go|go with|we will|we'll|approved|confirmed|"
+    r"settled|done deal|sounds good|yes,? let's|fine by me|makes sense|works for me|go ahead|"
+    r"let's do (?:it|that)|postpone[d]?|we won't|we will not)\b", re.I,
 )
 INTRO = r"\b(?:this is|i am|i'm|my name is|it's)\s+"
 DEADLINE_ADJACENCY = 2
@@ -100,6 +102,52 @@ def _quote_matches(quote: str, ids: list[str], seg: dict[str, Segment], threshol
     return any(fuzz.partial_ratio(q, t) >= threshold for t in [*texts, " ".join(texts)])
 
 
+def _named(speaker: str | None) -> bool:
+    """A real name (from speaker naming), not a "Speaker N" label."""
+    return bool(speaker) and not re.fullmatch(r"Speaker \d+", speaker or "")
+
+
+def owner_from_speaker(ids: list[str], refined: list[Segment], order: dict[str, int]) -> tuple[str, list[str]] | None:
+    """(owner, extra ids) when the owner is the named speaker who took the task on, else None.
+
+    "I'll update the slides" said by Prachi -> Prachi. "Can you check the upload?" answered with
+    "Sure, I'll do it" by Prachi -> Prachi (her reply is added as evidence). Names come from speaker
+    labels, which are themselves grounded in the transcript (see speaker_names.py).
+    """
+    by_id = {s.id: s for s in refined}
+    for i in ids:
+        s = by_id[i]
+        if FIRST_PERSON_COMMIT.search(s.text) and not REQUEST.search(s.text) and _named(s.speaker):
+            return s.speaker, []  # type: ignore[return-value]
+    for i in ids:
+        s = by_id[i]
+        k = order[i]
+        if REQUEST.search(s.text) and k + 1 < len(refined):
+            reply = refined[k + 1]
+            if _named(reply.speaker) and reply.speaker != s.speaker and (
+                    is_agreeing_reply(s, reply) or FIRST_PERSON_COMMIT.search(reply.text)):
+                return reply.speaker, [reply.id]  # type: ignore[return-value]
+    return None
+
+
+def find_agreement(ids: list[str], refined: list[Segment], order: dict[str, int]) -> tuple[str, list[str]] | None:
+    """(agreement text, extra ids) from the transcript for a decision citing `ids`, or None.
+
+    A cited line that states the agreement (and is not itself hedged), else a short acceptance by another
+    person right after the last cited line ("Agreed.", "Sounds good.").
+    """
+    by_id = {s.id: s for s in refined}
+    for i in ids:
+        text = by_id[i].text
+        if AGREEMENT_CUE.search(text) and not PROPOSAL_CUE.search(text):
+            return text, []
+    last = max(order[i] for i in ids)
+    if last + 1 < len(refined) and is_agreeing_reply(refined[last], refined[last + 1]):
+        nxt = refined[last + 1]
+        return nxt.text, [nxt.id]
+    return None
+
+
 def verify(
     lm2: LM2Output, raw: list[Segment], refined: list[Segment], refinement: Refinement, meta: Meta,
     settings: Settings, diarization_on: bool,
@@ -159,6 +207,12 @@ def verify(
         if not ids:
             stats.items_dropped += 1
             continue
+        if not (AGREEMENT_CUE.search(d.agreement_evidence) and _quote_matches(d.agreement_evidence, ids, seg, thr)):
+            # The model's quote was paraphrased or incomplete: use the real agreement line if there is one.
+            repaired = find_agreement(ids, refined, order)
+            if repaired:
+                d = d.model_copy(update={"agreement_evidence": repaired[0]})
+                ids = sorted(set(ids) | set(repaired[1]), key=order.get)
         if AGREEMENT_CUE.search(d.agreement_evidence) and _quote_matches(d.agreement_evidence, ids, seg, thr):
             decisions.append(Decision(id="D0", decision=d.decision, agreement_evidence=d.agreement_evidence,
                                       evidence_segment_ids=ids))
@@ -170,6 +224,11 @@ def verify(
     tasks: list[ActionItem] = []
     for t in lm2.action_items:
         ids = known(t.evidence_segment_ids)
+        if ids and not _quote_matches(t.evidence_quote, ids, seg, thr):
+            # Paraphrased quote: keep the item if a cited line really states a task, quoting that line.
+            line = next((seg[i].text for i in ids if TASK_CUE.search(seg[i].text)), None)
+            if line:
+                t = t.model_copy(update={"evidence_quote": line})
         if not ids or not _quote_matches(t.evidence_quote, ids, seg, thr):
             stats.items_dropped += 1
             continue
@@ -177,6 +236,13 @@ def verify(
         owner, why = resolve_pointer(t.owner_evidence, ids, seg, diarization_on, "owner", order)
         if owner == UNSPECIFIED and t.owner_evidence is not None:
             flags += ["owner_downgraded", *([why] if why else [])]
+        if owner == UNSPECIFIED and diarization_on:
+            spoken = owner_from_speaker(ids, refined, order)
+            if spoken:
+                owner, extra = spoken
+                ids = sorted(set(ids) | set(extra), key=order.get)
+                flags = [f for f in flags if f not in ("owner_downgraded", "pointer_invalid",
+                                                        "self_assignment_unverified")] + ["owner_from_speaker"]
         deadline, why = resolve_pointer(t.deadline_evidence, ids, seg, diarization_on, "deadline", order)
         if deadline == UNSPECIFIED and t.deadline_evidence is not None:
             flags += ["deadline_downgraded", *([why] if why else [])]

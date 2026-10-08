@@ -91,7 +91,58 @@ def _squash(s: str) -> str:
     return re.sub(r"[\s\-.]", "", s.lower())
 
 
-def _name_changed(edit: Edit, seg: Segment, start: int, vocab_terms: set[str]) -> bool:
+STRONG_RENAME_CONFIDENCE = 0.85
+RENAME_CATEGORIES = {"proper_noun", "technical_term", "product", "acronym"}
+TITLE_NAME = re.compile(r"\b(?:mr|mrs|ms|miss|dr|prof|sir|madam)\.?\s+([A-Z][a-z]+)")
+# Context that marks a capitalized word as a person: "with Rahul", "ask Priya", "Rahul said", "Priya will".
+BEFORE_PERSON = re.compile(r"\b(?:with|ask|asked|tell|told|thanks|thank|ping|call|cc|meet|met)\s+$", re.I)
+AFTER_PERSON = re.compile(r"^\s*(?:said|says|told|asked|mentioned|thinks|thought|wants|wanted|will|would|can|"
+                          r"could|should|agreed|suggested|'ll|'s)\b", re.I)
+
+
+def people_names(segments: list[Segment]) -> frozenset[str]:
+    """Lower-cased names of people in this meeting: speaker names, self-introductions, greetings, Mr/Dr X.
+
+    These are never respelled, even when LM1 is confident.
+    """
+    from app.pipeline.speaker_names import ADDRESS, SELF_INTRO, _find
+
+    out: set[str] = set()
+    for s in segments:
+        if s.speaker and not s.speaker.lower().startswith("speaker"):
+            out |= {w.lower() for w in s.speaker.split()}
+        for name in _find(SELF_INTRO + ADDRESS, s.text):
+            out |= {w.lower() for w in name.split()}
+        out |= {m.group(1).lower() for m in TITLE_NAME.finditer(s.text)}
+    return frozenset(out)
+
+
+def _person_context(text: str, token: str) -> bool:
+    """Whether `token` is used like a person's name in `text` ("with Rahul", "Priya said")."""
+    for m in re.finditer(r"(?<!\w)" + re.escape(token) + r"(?!\w)", text):
+        if BEFORE_PERSON.search(text[: m.start()]) or AFTER_PERSON.search(text[m.end():]):
+            return True
+    return False
+
+
+def _confident_respelling(edit: Edit, changed: list[str], people: frozenset[str], seg_text: str = "") -> bool:
+    """A capitalized word may be respelled without any list ("Guhati" -> "Guwahati", "Pie Torch" ->
+    "PyTorch") when LM1 is very confident, calls it a place/product/technical term, the new spelling sounds
+    almost the same, and the word is not a person's name heard in this meeting."""
+    if edit.confidence < STRONG_RENAME_CONFIDENCE or edit.category not in RENAME_CATEGORIES:
+        return False
+    if any(c.lower() in people for c in changed):
+        return False
+    if any(_person_context(seg_text, c) for c in changed):
+        return False
+    a, b = _squash(edit.original), _squash(edit.replacement)
+    close_spelling = jellyfish.jaro_winkler_similarity(a, b) >= 0.8
+    close_sound = jellyfish.jaro_winkler_similarity(_metaphone(edit.original), _metaphone(edit.replacement)) >= 0.9
+    return close_spelling or close_sound
+
+
+def _name_changed(edit: Edit, seg: Segment, start: int, vocab_terms: set[str],
+                  people: frozenset[str] = frozenset()) -> bool:
     """A non-initial capitalized token in `original` is changed without support.
 
     Supported: only spacing or capitalization changes ("Fast API" -> "FastAPI"), a meeting vocabulary
@@ -99,18 +150,28 @@ def _name_changed(edit: Edit, seg: Segment, start: int, vocab_terms: set[str]) -
     (e.g. "Guhati" -> "Guwahati", "Pie Torch" -> "PyTorch"). People's names are in none of these, so they
     stay as heard. Sound-alike is still checked afterwards.
     """
+    if _squash(edit.original) == _squash(edit.replacement):
+        return False
+    toks = [t for t in re.findall(r"\b[A-Z][a-z]+\b", edit.original) if t not in edit.replacement]
+    # People heard in this meeting are never respelled, wherever the word sits ("Rahul said...").
+    if any(t.lower() in people for t in toks):
+        return True
+    r = edit.replacement.lower().strip()
+    in_vocab = r in vocab_terms or any(t and t in r for t in vocab_terms)
+    if in_vocab or r in known_terms():  # a known place/term (or the user's glossary) is never a person
+        return False
+    # Words used like a person's name ("with Rahul", "Priya said") are protected too.
+    if any(_person_context(seg.text, t) for t in toks):
+        return True
     caps = [c for c in capitalized_non_initial(seg.text[: start + len(edit.original)]) if c in edit.original]
     changed = [c for c in caps if c not in edit.replacement]
     if not changed:
         return False
-    if _squash(edit.original) == _squash(edit.replacement):
-        return False
-    r = edit.replacement.lower().strip()
-    in_vocab = r in vocab_terms or any(t and t in r for t in vocab_terms)
-    return not (in_vocab or r in known_terms())
+    return not _confident_respelling(edit, changed, people, seg.text)
 
 
-def check_edit(edit: Edit, seg: Segment | None, vocab_terms: set[str], settings: Settings) -> str | None:
+def check_edit(edit: Edit, seg: Segment | None, vocab_terms: set[str], settings: Settings,
+               people: frozenset[str] = frozenset()) -> str | None:
     """First failing check's reject reason, or None if the edit is safe."""
     o, r = edit.original, edit.replacement
     if edit.confidence < settings.LM1_MIN_CONFIDENCE:
@@ -124,7 +185,7 @@ def check_edit(edit: Edit, seg: Segment | None, vocab_terms: set[str], settings:
     if modal_set(o) != modal_set(r):
         return "modal_changed"
     start = seg.text.index(o)
-    if _name_changed(edit, seg, start, vocab_terms):
+    if _name_changed(edit, seg, start, vocab_terms, people):
         return "name_changed"
     if len(r) > 3 * max(len(o), 4):
         return "over_rewrite"
@@ -175,10 +236,11 @@ def guard_edits(
     proposed = [e for e in proposed if e.original.strip() != e.replacement.strip()]
     by_id = {s.id: s for s in raw}
     vocab_terms = {t["term"].lower() for t in vocab.get("terms", []) if t.get("term")}
+    people = people_names(raw)
     accepted: list[Edit] = []
     rejected: list[RejectedEdit] = []
     for e in proposed:
-        reason = check_edit(e, by_id.get(e.segment_id), vocab_terms, settings)
+        reason = check_edit(e, by_id.get(e.segment_id), vocab_terms, settings, people)
         if reason:
             rejected.append(RejectedEdit(**e.model_dump(), reject_reason=reason))
         else:
