@@ -268,5 +268,10 @@ async def guard(ctx: "JobContext") -> None:
     vocab = ctx.read(ctx.output_name(Stage.VOCABULARY)) or {"domain": "unknown", "terms": []}
     proposed = [Edit(**e) for e in ctx.read(ctx.output_name(Stage.REFINING))["edits"]]
     refined, accepted, rejected = guard_edits(raw, proposed, vocab, ctx.settings)
+    # Spoken symbols in technical names ("user underscore id" -> user_id), recorded as applied edits.
+    from app.pipeline.symbols import write_symbols
+
+    refined, symbol_accepted = write_symbols(refined)
+    accepted = accepted + symbol_accepted
     ctx.write("refined_transcript.json", [s.model_dump(mode="json") for s in refined])
     ctx.write(ctx.output_name(Stage.GUARDING), Refinement(vocabulary=vocab, accepted=accepted, rejected=rejected))

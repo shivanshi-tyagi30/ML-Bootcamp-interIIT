@@ -17,7 +17,7 @@ from app.models.record import (
     UNSPECIFIED, ActionItem, CitedSentence, Decision, Fidelity, MeetingRecord, Meta, MinutesTopic, Pointer,
     Proposal, Refinement, Segment,
 )
-from app.pipeline.candidates import FIRST_PERSON_COMMIT, PROPOSAL_CUE, REQUEST, TASK_CUE, is_agreeing_reply
+from app.pipeline.candidates import CONVERSATIONAL_AGREE, FIRST_PERSON_COMMIT, PROPOSAL_CUE, REQUEST, TASK_CUE, is_agreeing_reply
 from app.pipeline.fidelity import compute_fidelity
 from app.pipeline.guard import _word_spans
 
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 AGREEMENT_CUE = re.compile(
     r"\b(?:agree|agreed|decided|decision|final|finali[sz]e[d]?|let's go|go with|we will|we'll|approved|confirmed|"
     r"settled|done deal|sounds good|yes,? let's|fine by me|makes sense|works for me|go ahead|"
-    r"let's do (?:it|that)|postpone[d]?|we won't|we will not)\b", re.I,
+    r"let's do (?:it|that)|postpone[d]?|we won't|we will not)\b|" + CONVERSATIONAL_AGREE, re.I,
 )
 INTRO = r"\b(?:this is|i am|i'm|my name is|it's)\s+"
 DEADLINE_ADJACENCY = 2
@@ -207,13 +207,16 @@ def verify(
         if not ids:
             stats.items_dropped += 1
             continue
+        accepted_reply = False
         if not (AGREEMENT_CUE.search(d.agreement_evidence) and _quote_matches(d.agreement_evidence, ids, seg, thr)):
             # The model's quote was paraphrased or incomplete: use the real agreement line if there is one.
             repaired = find_agreement(ids, refined, order)
             if repaired:
                 d = d.model_copy(update={"agreement_evidence": repaired[0]})
                 ids = sorted(set(ids) | set(repaired[1]), key=order.get)
-        if AGREEMENT_CUE.search(d.agreement_evidence) and _quote_matches(d.agreement_evidence, ids, seg, thr):
+                accepted_reply = bool(repaired[1])  # a short "Ok." / "Agreed." from someone else
+        if ((AGREEMENT_CUE.search(d.agreement_evidence) or accepted_reply)
+                and _quote_matches(d.agreement_evidence, ids, seg, thr)):
             decisions.append(Decision(id="D0", decision=d.decision, agreement_evidence=d.agreement_evidence,
                                       evidence_segment_ids=ids))
         else:
