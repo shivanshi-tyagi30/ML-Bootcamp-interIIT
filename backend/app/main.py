@@ -7,10 +7,12 @@ import logging
 import time
 import shutil
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.api import routes_exports, routes_jobs
 from app.api.deps import AppState, Runner
@@ -45,26 +47,40 @@ def configure_logging() -> None:
         root.setLevel(logging.INFO)
 
 
+def scrub_stored_keys(settings: Settings) -> None:
+    """Remove API keys that older versions saved in job folders (keys now live in memory only)."""
+    from app.core.stages import STAGE_OUTPUT, Stage
+    from app.core.storage import read_json, write_json
+
+    for f in settings.jobs_dir.glob(f"*/{STAGE_OUTPUT[Stage.VALIDATING]}"):
+        data = read_json(f)
+        if isinstance(data, dict) and data.pop("api_key", None) is not None:
+            write_json(f, data)
+
+
 async def warmup(settings: Settings, services: Services) -> list[str]:
     """Load every model at startup; returns what could not be loaded (each step is best effort)."""
     log = logging.getLogger(__name__)
     failed: list[str] = []
-    try:
-        from app.pipeline.vad import silero_regions
-        import numpy as np
+    from app.pipeline.vad import silero_available
 
-        await asyncio.to_thread(silero_regions, np.zeros(16000, dtype=np.float32), 16000)
-    except Exception as e:  # noqa: BLE001
-        log.warning("warm-up: Silero VAD not loaded (%r)", e)
-        failed.append("Silero VAD")
-    if services.stt is None:
+    if silero_available():  # optional: the hosted website uses the energy gate only
+        try:
+            from app.pipeline.vad import silero_regions
+            import numpy as np
+
+            await asyncio.to_thread(silero_regions, np.zeros(16000, dtype=np.float32), 16000)
+        except Exception as e:  # noqa: BLE001
+            log.warning("warm-up: Silero VAD not loaded (%r)", e)
+            failed.append("Silero VAD")
+    if services.stt is None and settings.STT_BACKEND == "whisper":
         try:
             await asyncio.to_thread(stt_whisper.default_stt(settings)._load)
             log.info("warm-up: Whisper loaded")
         except Exception as e:  # noqa: BLE001
             log.warning("warm-up: Whisper not loaded (%r)", e)
             failed.append("Whisper")
-    if services.diarizer is None and settings.DIARIZATION_ENABLED and settings.DIARIZATION_BACKEND != "pyannote":
+    if services.diarizer is None and settings.DIARIZATION_ENABLED and settings.DIARIZATION_BACKEND in ("auto", "ecapa"):
         try:
             d = diarize.default_ecapa_diarizer(settings)
             await asyncio.to_thread(d.identifier._load)
@@ -72,10 +88,12 @@ async def warmup(settings: Settings, services: Services) -> list[str]:
         except Exception as e:  # noqa: BLE001
             log.warning("warm-up: speaker model not loaded (%r)", e)
             failed.append("speaker model")
-    if services.llm is None:
+    if services.llm is None and not settings.GEMINI_API_KEY and settings.LOCAL_LLM_ENABLED:  # cloud: nothing to load
         client = LLMClient(settings.LLM_BASE_URL, settings.LLM_BACKEND, settings.LLM_TIMEOUT_SEC,
                            keep_alive=settings.OLLAMA_KEEP_ALIVE)
-        for m in dict.fromkeys([settings.LM1_MODEL, settings.LM2_MODEL]):
+        # One-model-at-a-time mode: only LM1 (used first in every job) is preloaded; LM2 loads when needed.
+        models = [settings.LM1_MODEL] if settings.LM1_UNLOAD_BEFORE_LM2 else [settings.LM1_MODEL, settings.LM2_MODEL]
+        for m in dict.fromkeys(models):
             if not await client.preload(m):
                 failed.append(m)
     return failed
@@ -102,6 +120,7 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         msg = user_message("E_INTERNAL")  # detail column explains the restart
         for job_id in await db.mark_interrupted("E_INTERNAL", msg):
             logging.getLogger(__name__).warning("server restarted; job marked failed", extra={"job_id": job_id})
+        scrub_stored_keys(settings)
         state.not_loaded = []
         if settings.WARMUP_ON_START:
             t0 = time.perf_counter()
@@ -119,7 +138,7 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     app.state.trace = state
     app.add_middleware(
         CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=False,
-        allow_methods=["GET", "POST", "PATCH", "DELETE"], allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"], allow_headers=["*"],
         expose_headers=["Content-Disposition", "Content-Range", "Accept-Ranges"],
     )
     app.include_router(routes_jobs.router)
@@ -141,7 +160,11 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
             gpu = False
         loaded = lambda m: bool(m and getattr(m, "loaded", False))  # noqa: E731
         models = list(dict.fromkeys([settings.LM1_MODEL, settings.LM2_MODEL]))
-        if settings.LLM_BACKEND == "ollama":
+        if settings.GEMINI_API_KEY:  # cloud model configured on the server
+            llm = {"reachable": None, "missing": [], "cloud": settings.GEMINI_MODEL}
+        elif not settings.LOCAL_LLM_ENABLED:  # hosted website: each user brings a key
+            llm = {"reachable": None, "missing": [], "key_required": True}
+        elif settings.LLM_BACKEND == "ollama":
             llm = await ollama_status(settings.ollama_host, models)
         else:
             llm = {"reachable": None, "missing": []}
@@ -152,7 +175,10 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
             "not_loaded": state.not_loaded,
             "ffmpeg": bool(shutil.which("ffmpeg") and shutil.which("ffprobe")),
             "llm": {"backend": settings.LLM_BACKEND, "host": settings.ollama_host, **llm},
-            "whisper": {k: rt[k] for k in ("model", "device", "compute_type", "beam_size")},
+            "whisper": ({"model": settings.GROQ_STT_MODEL, "device": "Groq cloud", "compute_type": "-", "beam_size": 1}
+                        if settings.STT_BACKEND == "groq"
+                        else {k: rt[k] for k in ("model", "device", "compute_type", "beam_size")}),
+            "setup_problems": settings.setup_problems(),
             "models": {
                 "stt": loaded(services.stt or stt_whisper._default),
                 "stt_check": loaded(services.recheck_asr or recheck._default),
@@ -163,7 +189,19 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
             "gpu": gpu,
         }
 
+    if settings.SERVE_FRONTEND:
+        mount_frontend(app, settings.FRONTEND_DIST)
     return app
+
+
+def mount_frontend(app: FastAPI, dist: Path) -> None:
+    """Serve the built single-page frontend at / (API routes registered earlier take precedence)."""
+    log = logging.getLogger(__name__)
+    if not (dist / "index.html").exists():
+        log.warning("SERVE_FRONTEND is on but %s has no index.html; run `npm run build` in frontend/", dist)
+        return
+    app.mount("/", StaticFiles(directory=dist, html=True), name="frontend")
+    log.info("serving the website from %s", dist)
 
 
 app = create_app()

@@ -22,9 +22,21 @@ export function SetupCheck({ api }: { api: Api }) {
   const problems: { text: string; fix?: string }[] = [];
   if (h === null) problems.push({ text: "The backend isn't running.", fix: "uvicorn app.main:app --port 8000" });
   else {
+    for (const p of h.setup_problems ?? []) problems.push({ text: p });
     if (h.ffmpeg === false) problems.push({ text: "ffmpeg isn't installed, so audio can't be converted.", fix: "winget install Gyan.FFmpeg" });
-    if (h.llm?.reachable === false) problems.push({ text: `Ollama isn't reachable at ${h.llm.host}.`, fix: "ollama serve" });
-    else for (const m of h.llm?.missing ?? []) problems.push({ text: `Model ${m} isn't downloaded.`, fix: `ollama pull ${m}` });
+    // With a cloud API key (saved in this browser or configured on the server) Ollama is not needed.
+    let cloudKey = false;
+    try {
+      cloudKey = !!localStorage.getItem("trace_api_key")?.trim();
+    } catch {
+      /* storage unavailable */
+    }
+    if (!cloudKey && h.llm?.key_required) {
+      problems.push({ text: "This website needs a Gemini API key to write the minutes (free, no card).", fix: "Paste it in the API key box below" });
+    } else if (!cloudKey && !h.llm?.cloud) {
+      if (h.llm?.reachable === false) problems.push({ text: `Ollama isn't reachable at ${h.llm.host}.`, fix: "ollama serve" });
+      else for (const m of h.llm?.missing ?? []) problems.push({ text: `Model ${m} isn't downloaded.`, fix: `ollama pull ${m}` });
+    }
   }
   if (!problems.length) return null;
 

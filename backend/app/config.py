@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
 
     DATA_DIR: Path = Path("./data")
+    # Serve the built frontend (frontend/dist) from this server too, so one URL serves the page and the API
+    # (used on Colab and single-machine deployments; local development uses the Vite dev server instead).
+    SERVE_FRONTEND: bool = False
+    FRONTEND_DIST: Path = Path(__file__).resolve().parents[2] / "frontend" / "dist"
     MAX_FILE_MB: int = 200
     MAX_DURATION_MIN: int = 120
     MIN_SPEECH_SEC: float = 2.0
@@ -40,7 +44,17 @@ class Settings(BaseSettings):
     LOWCONF_DISPUTE_THRESHOLD: float = 0.45
 
     DIARIZATION_ENABLED: bool = True
-    DIARIZATION_BACKEND: Literal["auto", "ecapa", "pyannote"] = "auto"
+    DIARIZATION_BACKEND: Literal["auto", "ecapa", "pyannote", "assemblyai"] = "auto"
+    # Cloud speech for the hosted website (no local models): Whisper large-v3 on Groq for the words,
+    # AssemblyAI for who spoke when. Keys live in the server's environment.
+    STT_BACKEND: Literal["whisper", "groq"] = "whisper"
+    GROQ_API_KEY: str = ""
+    GROQ_STT_MODEL: str = "whisper-large-v3"
+    GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
+    ASSEMBLYAI_API_KEY: str = ""
+    ASSEMBLYAI_BASE_URL: str = "https://api.assemblyai.com"
+    ASSEMBLYAI_SPEECH_MODEL: str = ""  # "" = AssemblyAI's default
+    CLOUD_STT_TIMEOUT_SEC: int = 300
     ECAPA_MODEL: str = "speechbrain/spkrec-ecapa-voxceleb"
     ECAPA_DISTANCE_THRESHOLD: float = 0.6  # higher = fewer speakers; ignored when DIARIZATION_NUM_SPEAKERS is set
     # Rename "Speaker N" to a name the meeting itself states ("I am Shivanshi", "Hello Prachi" + reply).
@@ -51,6 +65,15 @@ class Settings(BaseSettings):
     LLM_BACKEND: Literal["ollama", "vllm"] = "ollama"
     LLM_BASE_URL: str = "http://localhost:11434/v1"
     LM2_BASE_URL: str = ""  # optional: separate server for LM2 (vLLM serves one model per server)
+    # Cloud LLM (one model for LM1 and LM2). Used when a key is set here or pasted in the app.
+    GEMINI_API_KEY: str = ""
+    # False on a hosted website without Ollama: every upload must bring a cloud API key (else E_NEEDS_KEY).
+    LOCAL_LLM_ENABLED: bool = True
+    GEMINI_MODEL: str = "gemini-2.5-flash"
+    # Any OpenAI-compatible endpoint works (e.g. https://api.openai.com/v1 with a GPT model).
+    CLOUD_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta/openai"
+    CLOUD_TIMEOUT_SEC: int = 300
+    CLOUD_REASONING_EFFORT: str = "low"  # thinking models: "low" keeps answers fast; "" = provider default
     LM1_MODEL: str = "qwen3:14b"
     LM2_MODEL: str = "gemma3:27b"
     LLM_TIMEOUT_SEC: int = 600
@@ -102,6 +125,15 @@ class Settings(BaseSettings):
             "beam_size": self.WHISPER_BEAM_SIZE or (5 if gpu else 1),
             "cpu_threads": self.WHISPER_CPU_THREADS or (os.cpu_count() or 4),
         }
+
+    def setup_problems(self) -> list[str]:
+        """Server settings that would make every upload fail (shown on the page, refused at upload)."""
+        out = []
+        if self.STT_BACKEND == "groq" and not self.GROQ_API_KEY:
+            out.append("GROQ_API_KEY is not set on the server (needed for transcription).")
+        if self.DIARIZATION_ENABLED and self.DIARIZATION_BACKEND == "assemblyai" and not self.ASSEMBLYAI_API_KEY:
+            out.append("ASSEMBLYAI_API_KEY is not set on the server (needed for speaker labels).")
+        return out
 
     @property
     def ollama_host(self) -> str:

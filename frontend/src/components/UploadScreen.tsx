@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ACCEPTED_EXTENSIONS, MAX_UPLOAD_MB, precheckFile } from "../lib/errors";
 import type { Api } from "../lib/api";
 import type { JobError } from "../lib/types";
@@ -38,6 +38,14 @@ function Promise_({ label, value }: { label: string; value: string }) {
 export function UploadScreen({ error, busy, mock, theme, onTheme, api, onStart, onOpenJob, onSample, onClearError }: Props) {
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
+  // Which model writes the minutes when no key is pasted: the server's own Gemini key, none, or a local model.
+  const [serverLlm, setServerLlm] = useState<"cloud" | "key_required" | "local">("local");
+  useEffect(() => {
+    if (mock) return;
+    api.health().then((h) => setServerLlm(h?.llm?.cloud ? "cloud" : h?.llm?.key_required ? "key_required" : "local")).catch(() => {});
+  }, [api, mock]);
+  const [apiKey, setApiKey] = useState(() => (typeof window !== "undefined" ? localStorage.getItem("trace_api_key") || "" : ""));
+  const [showKeyInput, setShowKeyInput] = useState(false);
   const [drag, setDrag] = useState(false);
   const [localError, setLocalError] = useState<JobError | null>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -158,6 +166,71 @@ export function UploadScreen({ error, busy, mock, theme, onTheme, api, onStart, 
                 placeholder="e.g. Meeting 1"
                 className="mt-1.5 h-10 w-full rounded-[2px] border border-ink/30 bg-surface px-3 text-[14px] font-medium text-ink placeholder:text-ink-3 transition-colors hover:border-ink/60 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
               />
+            </div>
+
+            <div className="mx-3 mb-3">
+              {!showKeyInput ? (
+                <button
+                  type="button"
+                  onClick={() => setShowKeyInput(true)}
+                  className="flex w-full items-center justify-between border border-dashed border-ink/30 bg-surface/60 px-3 py-2 text-left font-mono text-[11px] text-ink-2 transition-colors hover:border-ink hover:text-ink"
+                >
+                  <span>{apiKey ? "API Key saved · Click to edit" : "Click to paste your API Keys"}</span>
+                  {apiKey ? <span className="font-mono text-[10px] text-ink-3">saved</span> : null}
+                </button>
+              ) : (
+                <div className="border border-ink/40 bg-surface p-2.5">
+                  <div className="mb-1.5 flex items-center justify-between font-mono text-[10px] tracking-wider text-ink-2">
+                    <span>GEMINI API KEY</span>
+                    {apiKey && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setApiKey("");
+                          localStorage.removeItem("trace_api_key");
+                          setShowKeyInput(false);
+                        }}
+                        className="text-[10px] text-ink-3 hover:text-bad underline"
+                      >
+                        remove
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      value={apiKey}
+                      onChange={(e) => {
+                        const val = e.target.value.trim();
+                        setApiKey(val);
+                        if (val) {
+                          localStorage.setItem("trace_api_key", val);
+                        } else {
+                          localStorage.removeItem("trace_api_key");
+                        }
+                      }}
+                      placeholder="Paste API key here"
+                      className="h-8 flex-1 border border-ink/30 bg-bg px-2 font-mono text-[11px] text-ink placeholder:text-ink-3 focus:border-accent focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowKeyInput(false)}
+                      className="h-8 border border-ink bg-ink px-3 font-mono text-[11px] text-surface hover:bg-accent hover:text-accent-ink"
+                    >
+                      Save
+                    </button>
+                  </div>
+                </div>
+              )}
+              <p className="mt-1.5 font-mono text-[10px] text-ink-3">
+                {apiKey
+                  ? "Minutes are written by Gemini (cloud). The local model is not used."
+                  : serverLlm === "cloud"
+                    ? "Minutes are written by Gemini with this website's key. You can paste your own key instead."
+                    : serverLlm === "key_required"
+                      ? "Paste your free Gemini API key to process recordings."
+                      : "No key: minutes are written by the local model on this computer (much slower)."}
+              </p>
             </div>
 
             <div className="flex items-center justify-between gap-3 border-t border-ink px-3 py-3">

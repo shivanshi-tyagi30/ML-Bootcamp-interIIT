@@ -18,6 +18,8 @@ export interface Api {
   getJob(jobId: string): Promise<JobState>;
   listJobs(): Promise<JobSummary[]>;
   renameJob(jobId: string, title: string): Promise<JobSummary>;
+  /** Save hand corrections so a reload and every download show them. */
+  saveEdits(jobId: string, edits: RecordEdits): Promise<void>;
   deleteJob(jobId: string): Promise<void>;
   /** Stop a queued or running job; finished steps stay saved. */
   cancelJob(jobId: string): Promise<JobSummary>;
@@ -30,6 +32,12 @@ export interface Api {
   /** Seekable original recording served by the backend, or null. */
   audioUrl(jobId: string): string | null;
 }
+
+/** The parts of a record the user can correct by hand. */
+export type RecordEdits = Pick<
+  PartialRecord,
+  "raw_transcript" | "refined_transcript" | "summary" | "minutes" | "decisions" | "open_proposals" | "action_items"
+>;
 
 export class ApiError extends Error {
   constructor(public jobError: JobError) {
@@ -58,6 +66,7 @@ async function readError(res: Response): Promise<JobError> {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
+    // The cloud API key travels only with uploads (createJob), never with every request.
     res = await fetch(`${BASE}${path}`, init);
   } catch {
     throw new ApiError(makeError("E_NETWORK"));
@@ -146,6 +155,8 @@ const httpApi: Api = {
     form.append("file", file);
     if (title?.trim()) form.append("title", title.trim());
     if (glossary?.trim()) form.append("glossary", glossary.trim());
+    const apiKey = typeof window !== "undefined" ? localStorage.getItem("trace_api_key")?.trim() : null;
+    if (apiKey) form.append("api_key", apiKey);
     const body = await request<{ job_id: string; cached?: boolean }>(`/jobs${force ? "?force=true" : ""}`, {
       method: "POST",
       body: form,
@@ -219,6 +230,14 @@ const httpApi: Api = {
     return (await request<{ items: JobSummary[] }>(`/jobs?limit=50`)).items;
   },
 
+  async saveEdits(jobId, edits) {
+    await request<void>(`/jobs/${jobId}/edits`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(edits),
+    });
+  },
+
   renameJob(jobId, title) {
     return request<JobSummary>(`/jobs/${jobId}`, {
       method: "PATCH",
@@ -236,7 +255,16 @@ const httpApi: Api = {
   },
 
   retryJob(jobId) {
-    return request<JobSummary>(`/jobs/${jobId}/retry`, { method: "POST" });
+    // Send the saved cloud API key again: the server keeps keys in memory only, so after a restart a
+    // retry would otherwise fall back to the local model.
+    const form = new FormData();
+    try {
+      const key = localStorage.getItem("trace_api_key")?.trim();
+      if (key) form.append("api_key", key);
+    } catch {
+      /* storage unavailable */
+    }
+    return request<JobSummary>(`/jobs/${jobId}/retry`, { method: "POST", body: form });
   },
 
   async health() {
@@ -422,6 +450,10 @@ const mockApi: Api = {
 
   async listJobs() {
     return [...mockJobs.values()].map((j) => j.summary).reverse();
+  },
+
+  async saveEdits() {
+    // Mock mode builds downloads in the browser from the edited record itself.
   },
 
   async renameJob(jobId, title) {

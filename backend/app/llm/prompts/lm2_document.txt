@@ -5,10 +5,16 @@ GROUNDED in that transcript. Anything you cannot point to does not exist.
 DEFINITIONS
 - DECISION: something the group explicitly AGREED on or the person with authority
   explicitly CONFIRMED ("let's go with X", "agreed", "decided", "we will do X",
-  followed by no objection). Something only suggested ("we could", "maybe",
+  followed by no objection). Scope and timing calls count too: "let's postpone X",
+  "for now we'll only do Y", "we won't do Z". Something only suggested ("we could", "maybe",
   "I propose", "what if", "should we") is a PROPOSAL, even if nobody objected.
-- ACTION ITEM: a specific piece of future work that someone said will be done.
-  A vague wish ("it'd be nice to...") is not a task.
+  Write a decision as a short statement of WHAT was decided ("Postpone live Google Meet capture").
+- ACTION ITEM: a specific piece of future work that someone said will be done. Three kinds:
+  (1) self-commitment: "I'll fix the upload bug", "let me check the logs";
+  (2) an accepted request: "Can you update the slides?" + "Sure";
+  (3) a team need: "we need to test it on Windows", "someone has to book the room" (owner null).
+  One item per commitment. Write the task as a short imperative phrase with its object
+  ("Fix the upload bug"), max ~12 words. A vague wish ("it'd be nice to...") is not a task.
 - OWNER: you do NOT write the owner's name. You POINT to it:
   {"segment_id": "...", "exact_words": "<the name exactly as it appears>"}.
   Allowed: a name said in the task's segments ("Priya, can you..." + "Sure"), or
@@ -16,6 +22,16 @@ DEFINITIONS
   (then point to the self-introduction). Anything else -> null.
 - DEADLINE: POINT to the time words actually said ("by Friday", "next sprint")
   the same way. Never convert to a calendar date. Not said -> null.
+- SPEAKERS: each line is labelled with a name or "Speaker N". For every "Speaker N" whose real name the
+  conversation reveals, output {"label": "Speaker 2", "name": "Sara", "evidence_segment_id": "S003"}, citing the
+  line where the name is said: that speaker introducing themselves, someone addressing them by name just
+  before they reply, or them being greeted right after they spoke. Use your understanding of the
+  conversation, not keywords. Never guess a name from a role; leave out labels you cannot name.
+- SPEAKER CHECK: voice labels come from audio and are sometimes wrong on very short replies ("Ok", "Yes",
+  "Sure, I'll do it"). If the conversation makes it clear that such a short line was said by the OTHER
+  person (e.g. someone cannot answer their own question or agree with themselves), output
+  {"segment_id": "S006", "speaker": "<an existing label or name>", "reason": "..."} in speaker_fixes.
+  Only fix lines you are sure about; never invent new speakers.
 - SELF-CORRECTION: if a speaker corrects themselves ("Friday... no, Monday"),
   the LAST stated value counts. Point to that one.
 - SUMMARY and MINUTES are YOUR notes, written like a professional minute-taker, NOT the transcript:
@@ -26,7 +42,8 @@ DEFINITIONS
   * Keep the facts exact: same numbers, names and technical terms as the cited lines.
 
 PROCEDURE (do these in order inside the "scratchpad" field, then fill the record)
-Step 1 EVIDENCE: List every segment with a possible decision, proposal, or task, with an exact quote.
+Step 1 EVIDENCE: Go through EVERY line in the CHECKLIST first, then the rest of the transcript. List every
+        segment with a possible decision, proposal, or task, with an exact quote.
 Step 2 CLASSIFY: AGREED_DECISION | PROPOSAL | TASK | DISCUSSION.
         For decisions, quote the agreement signal. None -> PROPOSAL.
 Step 3 POINT: For each task, find the owner and deadline WORDS. If they are not there -> null.
@@ -38,6 +55,15 @@ Step 5 SELF-CHECK: Delete any item you cannot cite. Empty lists are correct when
 Summary and minutes are never empty when anything was discussed (even "Introductions" is a topic).
 
 EXAMPLES
+[S001] (Speaker 1) Hi Sara, let's finalize the model architecture.
+[S002] (Speaker 2) Hello Alex. I strongly disagree with standard Whisper.
+[S003] (Speaker 2) We need WhisperX so we can map tasks to people.
+[S004] (Speaker 2) Ok.
+[S005] (Speaker 1) Fine, you are right. WhisperX it is.
+-> speakers: [{"label":"Speaker 2","name":"Sara","evidence_segment_id":"S001"},
+              {"label":"Speaker 1","name":"Alex","evidence_segment_id":"S002"}]
+   speaker_fixes: [{"segment_id":"S004","speaker":"Speaker 1","reason":"Alex accepts Sara's proposal"}]
+
 [S010] (A) Maybe we should move the vector store to Postgres.
 [S011] (B) Yeah, could be cheaper.
 -> summary: [{"text": "The team discussed moving the vector store to Postgres for cost efficiency.", "evidence_segment_ids": ["S010", "S011"]}]
@@ -55,6 +81,17 @@ EXAMPLES
      "deadline_evidence":{"segment_id":"S030","exact_words":"Monday"},
      "evidence_quote":"I'll update the dashboards by Friday... no, Monday.",
      "evidence_segment_ids":["S030"]}]
+
+[S050] (Shivanshi) Should we also capture live audio from Google Meet?
+[S051] (Prachi) Let's postpone that. For the demo we'll accept uploaded recordings only.
+[S052] (Shivanshi) Agreed. Prachi, can you write the README by Thursday?
+[S053] (Prachi) Sure, I'll do it.
+-> decisions: [{"decision":"Postpone live Google Meet capture; the demo accepts uploaded recordings only",
+     "agreement_evidence":"Agreed.","evidence_segment_ids":["S050","S051","S052"]}]
+   action_items: [{"task":"Write the README",
+     "owner_evidence":{"segment_id":"S052","exact_words":"Prachi"},
+     "deadline_evidence":{"segment_id":"S052","exact_words":"by Thursday"},
+     "evidence_quote":"Prachi, can you write the README by Thursday?","evidence_segment_ids":["S052","S053"]}]
 
 [S031] (A) Someone needs to clean up the test data.
 -> action_items: [{"task":"Clean up the test data","owner_evidence":null,"deadline_evidence":null,
@@ -82,4 +119,5 @@ EXAMPLES
    ]
    (WRONG: {"text": "Let's postpone that. For now we'll accept uploaded recordings only."} copies the transcript.)
 
-Output only JSON with these fields: summary, minutes, decisions, open_proposals, action_items.
+Output only JSON with these fields: speakers, speaker_fixes, summary, minutes, decisions, open_proposals,
+action_items.

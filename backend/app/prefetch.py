@@ -74,14 +74,18 @@ def main() -> int:
     """Fetch everything; return the process exit code."""
     s = get_settings()
     ok = True
-    ok &= _step(f"Whisper {s.whisper_runtime()['model']}", lambda: fetch_whisper(s))
-    ok &= _step("Silero VAD", fetch_silero)
-    if s.DIARIZATION_ENABLED:
+    if s.STT_BACKEND == "whisper":
+        ok &= _step(f"Whisper {s.whisper_runtime()['model']}", lambda: fetch_whisper(s))
+    from app.pipeline.vad import silero_available
+
+    if silero_available():
+        ok &= _step("Silero VAD", fetch_silero)
+    if s.DIARIZATION_ENABLED and s.DIARIZATION_BACKEND != "assemblyai":
         if s.DIARIZATION_BACKEND == "pyannote" or (s.DIARIZATION_BACKEND == "auto" and s.HF_TOKEN):
             ok &= _step("pyannote speaker model", lambda: fetch_pyannote(s))
         else:
             ok &= _step(f"speaker model {s.ECAPA_MODEL}", lambda: fetch_ecapa(s))
-    if s.LLM_BACKEND == "ollama":
+    if s.LLM_BACKEND == "ollama" and s.LOCAL_LLM_ENABLED and not s.GEMINI_API_KEY:
         for m in dict.fromkeys([s.LM1_MODEL, s.LM2_MODEL]):
             ok &= _step(f"Ollama {m}", lambda m=m: asyncio.run(pull_ollama(s, m)))
     print("All models are ready." if ok else "Some models are missing; see FAILED above.", flush=True)

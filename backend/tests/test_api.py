@@ -83,6 +83,11 @@ def test_full_lifecycle(client, fixtures_dir):
         forced = client.post("/api/jobs?force=true", files={"file": ("tone.wav", f)})
     assert forced.status_code == 202 and forced.json()["job_id"] != job_id
     wait_done(client, forced.json()["job_id"])
+    # A result made by the local model is not reused for an upload with a cloud key.
+    with open(fixtures_dir / "tone.wav", "rb") as f:
+        keyed = client.post("/api/jobs", files={"file": ("tone.wav", f)}, data={"api_key": "k"})
+    assert keyed.status_code == 202 and keyed.json()["cached"] is False
+    wait_done(client, keyed.json()["job_id"])
 
     # Rename updates the row, the record and the download name.
     r = client.patch(f"/api/jobs/{job_id}", json={"title": "Renamed meeting"})
@@ -112,7 +117,7 @@ def test_full_lifecycle(client, fixtures_dir):
     # Delete removes the row and the folder.
     assert client.delete(f"/api/jobs/{job_id}").status_code == 204
     assert client.get(f"/api/jobs/{job_id}").status_code == 404
-    assert client.get("/api/jobs").json()["total"] == 1
+    assert client.get("/api/jobs").json()["total"] == 2  # the forced and the keyed upload remain
 
 
 def test_bad_job_id(client):
@@ -123,3 +128,44 @@ def test_bad_job_id(client):
 def test_schema_and_health(client):
     assert "MeetingRecord" in client.get("/api/schema/record").json()["title"]
     assert client.get("/api/health").json()["status"] == "ok"
+
+
+def test_hand_edits_are_saved_and_in_every_download(client, fixtures_dir):
+    job_id = upload(client, fixtures_dir / "tone.wav").json()["job_id"]
+    rec = wait_done(client, job_id)["record"]
+    seg = {**rec["refined_transcript"][0], "speaker": "Shivanshi Tyagi", "text": "Edited by hand: Rs. 2,75,000."}
+    owner_fixed = [{**a, "owner": "Shivanshi Tyagi"} for a in rec["action_items"]]
+    r = client.put(f"/api/jobs/{job_id}/edits", json={
+        "refined_transcript": [seg, *rec["refined_transcript"][1:]],
+        "raw_transcript": [{**rec["raw_transcript"][0], "speaker": "Shivanshi Tyagi"}, *rec["raw_transcript"][1:]],
+        "action_items": owner_fixed,
+    })
+    assert r.status_code == 204, r.text
+    # Reloading the page shows the edits.
+    again = client.get(f"/api/jobs/{job_id}").json()["record"]
+    assert again["refined_transcript"][0]["text"] == "Edited by hand: Rs. 2,75,000."
+    # Every download is rebuilt from them.
+    for fmt in ("txt_refined", "md", "json", "docx"):
+        body = client.get(f"/api/jobs/{job_id}/export", params={"fmt": fmt})
+        assert body.status_code == 200
+        if fmt != "docx":
+            assert "Shivanshi Tyagi" in body.text, fmt
+    assert "Edited by hand" in client.get(f"/api/jobs/{job_id}/export", params={"fmt": "txt_refined"}).text
+    assert client.put("/api/jobs/" + "a" * 32 + "/edits", json={}).status_code == 404
+
+
+def test_edits_without_a_record_go_into_the_transcript_downloads(client, settings, fixtures_dir):
+    from app.core.stages import STAGE_OUTPUT, Stage
+    from app.core.storage import job_dir
+
+    job_id = upload(client, fixtures_dir / "tone.wav").json()["job_id"]
+    wait_done(client, job_id)
+    d = job_dir(settings.jobs_dir, job_id)
+    (d / STAGE_OUTPUT[Stage.VERIFYING]).unlink()  # as when writing the record failed
+    raw = client.get(f"/api/jobs/{job_id}").json()["partial"]["raw_transcript"]
+    edited = [{**raw[0], "text": "Corrected line."}, *raw[1:]]
+    assert client.put(f"/api/jobs/{job_id}/edits", json={"raw_transcript": edited}).status_code == 204
+    assert client.get(f"/api/jobs/{job_id}").json()["partial"]["raw_transcript"][0]["text"] == "Corrected line."
+    assert "Corrected line." in client.get(f"/api/jobs/{job_id}/export", params={"fmt": "txt_raw"}).text
+    # The pipeline's own file is untouched, so Retry still resumes from it.
+    assert "Corrected line." not in (d / STAGE_OUTPUT[Stage.RAW_SAVED]).read_text()

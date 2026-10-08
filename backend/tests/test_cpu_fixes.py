@@ -401,3 +401,81 @@ def test_job_detail_includes_stage_timings(settings, fixtures_dir):
             job_id = c.post("/api/jobs", files={"file": ("tone.wav", f)}).json()["job_id"]
         write_json(settings.jobs_dir / job_id / "timings.json", {"transcribing": 41.5, "documenting": 95.0})
         assert c.get(f"/api/jobs/{job_id}").json()["timings"] == {"transcribing": 41.5, "documenting": 95.0}
+
+
+def test_one_model_at_a_time_unloads_the_other_before_each_llm_step(settings, fixtures_dir):
+    from app.core.events import EventBus
+    from app.pipeline.runner import Services, run_job
+    from tests.conftest import FakeLLM, FakeSTT
+    from tests.test_pipeline import JOB, _setup, _vad
+
+    class TrackingLLM(FakeLLM):
+        def __init__(self):
+            super().__init__()
+            self.unloaded = []
+
+        async def unload(self, model):
+            self.calls.append(f"unload:{model}")
+
+    s = settings.model_copy(update={"LM1_MODEL": "qwen3:8b", "LM2_MODEL": "gemma3:12b",
+                                    "LM1_UNLOAD_BEFORE_LM2": True, "VOCAB_PASS": "always"})
+    llm = TrackingLLM()
+
+    async def go():
+        db, _ = await _setup(s, fixtures_dir)
+        await run_job(JOB, s, db, EventBus(), Services(stt=FakeSTT(), vad=_vad, llm=llm))
+        return await db.get(JOB)
+
+    assert asyncio.run(go())["status"] == "completed"
+    calls = llm.calls
+    # Gemma is freed before Qwen's vocabulary and refine calls, Qwen before Gemma writes the record.
+    lm2_schema = "LM2Output" if "LM2Output" in calls else "LM2Record"
+    assert calls.index("unload:qwen3:8b") < calls.index(lm2_schema)
+    assert calls.index("Vocabulary") < calls.index("unload:qwen3:8b")
+
+
+def test_warmup_preloads_only_lm1_in_one_model_mode(monkeypatch, settings):
+    import json
+
+    import httpx
+
+    from app import main
+    from app.pipeline.runner import Services
+    from tests.conftest import FakeSTT
+
+    seen = []
+    real = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(
+        lambda req: (seen.append(json.loads(req.content)["model"]), httpx.Response(200, json={}))[1]), **kw))
+    s = settings.model_copy(update={"LM1_MODEL": "qwen3:8b", "LM2_MODEL": "gemma3:12b", "LM1_UNLOAD_BEFORE_LM2": True})
+    asyncio.run(main.warmup(s, Services(stt=FakeSTT())))
+    assert seen == ["qwen3:8b"]
+
+
+def test_ten_minute_record_with_scratchpad_fits_a_12k_context():
+    from app.llm.client import context_size
+
+    assert context_size("x" * 4000, "y" * 9000, 6144, 32768) == 12288
+
+
+def test_retry_resends_the_cloud_key_in_memory_only(settings, fixtures_dir):
+    from app.core.storage import job_dir
+    from app.pipeline.runner import JOB_API_KEYS
+
+    async def runner(job_id: str) -> None:
+        state = holder["app"].state.trace
+        await state.db.update(job_id, status="failed", stage="failed", error_code="E_CANCELLED")
+
+    holder = {}
+    app = create_app(settings=settings, runner=runner)
+    holder["app"] = app
+    with TestClient(app) as c:
+        with open(fixtures_dir / "tone.wav", "rb") as f:
+            job_id = c.post("/api/jobs", files={"file": ("tone.wav", f)}).json()["job_id"]
+        _wait(c, job_id, {"failed"})
+        JOB_API_KEYS.pop(job_id, None)  # as after a server restart
+        assert c.post(f"/api/jobs/{job_id}/retry", data={"api_key": "secret-key"}).status_code == 202
+        assert JOB_API_KEYS.get(job_id) == "secret-key"
+        files = job_dir(settings.jobs_dir, job_id).rglob("*.json")
+        assert all("secret-key" not in p.read_text() for p in files)
+    JOB_API_KEYS.pop(job_id, None)

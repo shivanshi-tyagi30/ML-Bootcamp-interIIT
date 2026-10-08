@@ -54,6 +54,7 @@ const FLAG_TEXT: Record<VerifierFlag, string> = {
   pointer_invalid: "The model pointed at words that aren't in the transcript",
   audio_unclear: "The audio check couldn't confirm the words",
   self_assignment_unverified: "The owner introduced themselves elsewhere, but speaker labels couldn't confirm it was them",
+  owner_from_speaker: "The owner is the named speaker who took the task on",
 };
 
 function Field({
@@ -106,6 +107,8 @@ function Field({
                 Copied from <span className="font-mono">{pointer.segment_id}</span>
                 {seg && <>: “{seg.text}”</>}
               </>
+            ) : kind === "owner" && flags.includes("owner_from_speaker") ? (
+              `${value} said they would do this (or accepted the request) in the recording.`
             ) : (
               `${kind === "owner" ? "Owner" : "Deadline"} as stated in the recording.`
             )

@@ -1,0 +1,3 @@
+# Hosted website on Render's free plan (512 MB RAM): no local models and no PyTorch. Speech runs in the cloud
+# (Whisper large-v3 on Groq, speaker labels from AssemblyAI) and Gemini writes the minutes.
+-r requirements-dev.txt

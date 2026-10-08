@@ -149,5 +149,6 @@ export const Icon = {
   file: (p: { className?: string }) => <I {...p} d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5" />,
   chevron: (p: { className?: string }) => <I {...p} d="m6 9 6 6 6-6" />,
   plus: (p: { className?: string }) => <I {...p} d="M12 5v14M5 12h14" />,
+  pencil: (p: { className?: string }) => <I {...p} d="M4 20h4L19 9l-4-4L4 16zM14 6l4 4" />,
   info: (p: { className?: string }) => <I {...p} d="M12 11v5m0-8.5v.01M12 21a9 9 0 1 1 0-18 9 9 0 0 1 0 18z" />,
 };

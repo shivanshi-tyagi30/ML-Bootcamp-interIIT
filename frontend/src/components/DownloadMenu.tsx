@@ -12,7 +12,13 @@ const OPTIONS: { fmt: ExportFormat; label: string; ext: string; needsRecord?: bo
   { fmt: "json", label: "Record · JSON", ext: "json" },
 ];
 
-export function DownloadMenu({ api, jobId, record }: { api: Api; jobId: string; record: PartialRecord }) {
+export function DownloadMenu({ api, jobId, record, beforeDownload }: {
+  api: Api;
+  jobId: string;
+  record: PartialRecord;
+  /** Waits for hand edits still being saved, so the server's file includes them. */
+  beforeDownload?: () => Promise<void>;
+}) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const base = (record.meta.source_file ?? "meeting").replace(/\.[^.]+$/, "");
@@ -30,8 +36,9 @@ export function DownloadMenu({ api, jobId, record }: { api: Api; jobId: string; 
     };
   }, [open]);
 
-  const download = (fmt: ExportFormat, ext: string) => {
+  const download = async (fmt: ExportFormat, ext: string) => {
     setOpen(false);
+    await beforeDownload?.();
     const name = `${base}_${fmt}.${ext}`;
     const url = api.exportUrl(jobId, fmt);
     if (url) {

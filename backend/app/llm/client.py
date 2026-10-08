@@ -7,7 +7,9 @@ switch off Qwen3's "thinking" (very slow on CPU) and keep the model loaded betwe
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Literal, Protocol, TypeVar
@@ -23,7 +25,7 @@ T = TypeVar("T", bound=BaseModel)
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 OnRetry = Callable[[str], Awaitable[None]]
-CONTEXT_BUCKETS = (8192, 16384, 32768, 65536, 131072)
+CONTEXT_BUCKETS = (8192, 12288, 16384, 32768, 65536, 131072)
 
 
 def load_prompt(name: str) -> str:
@@ -216,3 +218,279 @@ async def ollama_status(host: str, models: list[str], timeout: float = 3.0) -> d
         return {"reachable": False, "missing": models}
     have = names | {n.removesuffix(":latest") for n in names}
     return {"reachable": True, "missing": [m for m in models if m not in have and f"{m}:latest" not in names]}
+
+
+GEMINI_OPENAI_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
+CLOUD_MIN_OUTPUT_TOKENS = 8192  # thinking models spend part of the output budget on reasoning
+
+
+def inline_schema(schema: type[BaseModel]) -> dict[str, Any]:
+    """JSON Schema with $refs inlined and titles/defaults removed: the subset cloud APIs accept."""
+    full = schema.model_json_schema()
+    defs = full.pop("$defs", {})
+
+    def walk(node: Any) -> Any:
+        if isinstance(node, dict):
+            if "$ref" in node:
+                return walk(defs[node["$ref"].split("/")[-1]])
+            return {k: walk(v) for k, v in node.items() if k not in ("title", "default")}
+        if isinstance(node, list):
+            return [walk(x) for x in node]
+        return node
+
+    return walk(full)
+
+
+RESOLVED_MODELS: dict[tuple[str, str], str] = {}  # (base_url, requested model) -> model actually available
+
+
+class GeminiClient:
+    """Cloud LLM through an OpenAI-compatible chat API (Google Gemini by default; GPT, Groq etc. by URL).
+
+    - Asks for our exact JSON structure (`response_format: json_schema`). A provider that rejects it gets
+      plain JSON mode with the structure written into the prompt instead.
+    - Leaves room for "thinking" models: the output budget is never below CLOUD_MIN_OUTPUT_TOKENS.
+    - Clear errors for a bad key, rate limits and timeouts; never a silent switch to a slower model.
+    - With a key the cloud model is the only model: no internet is a clear error, never the slow local model.
+    """
+
+    def __init__(
+        self, api_key: str, model: str = "gemini-2.5-flash", timeout: int = 300,
+        base_url: str = GEMINI_OPENAI_URL, reasoning_effort: str = "low",
+    ) -> None:
+        """Create a client for one cloud model (used for both LM1 and LM2)."""
+        self.api_key = api_key.strip()
+        self.requested = model.strip() or "gemini-2.5-flash"
+        self.base_url = base_url.rstrip("/")
+        # A retired model replaced once is replaced for every later job too (no repeated 404s).
+        self.model = RESOLVED_MODELS.get((self.base_url, self.requested), self.requested)
+        # A model that was busy a few minutes ago: start this job on the one that answered instead.
+        switched, until = BUSY_SWITCH.get((self.base_url, self.requested), ("", 0.0))
+        if switched and time.monotonic() < until:
+            self.model = switched
+        self.timeout = timeout
+        self.reasoning_effort = reasoning_effort.strip()
+        self.schema_in_prompt = False  # set after a provider rejects json_schema
+        self.minimal_ok = True  # cleared after a provider rejects reasoning_effort="minimal"
+        self._available: list[str] = []
+        self._tried: set[str] = set()
+
+    @property
+    def name(self) -> str:
+        """Model label for the record."""
+        return f"{self.model} (cloud)"
+
+    async def preload(self, model: str) -> bool:
+        """Nothing to load for a cloud model."""
+        return True
+
+    async def unload(self, model: str) -> None:
+        """Nothing to unload for a cloud model."""
+
+    def _body(self, messages: list[dict[str, str]], schema: type[BaseModel], max_tokens: int) -> dict[str, Any]:
+        """Request body for one call."""
+        body: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0.0,
+            "max_tokens": max(max_tokens * 2, CLOUD_MIN_OUTPUT_TOKENS),
+        }
+        if self.schema_in_prompt:
+            body["response_format"] = {"type": "json_object"}
+        else:
+            body["response_format"] = {"type": "json_schema", "json_schema": {
+                "name": schema.__name__, "schema": inline_schema(schema), "strict": False}}
+        effort = self._effort(schema)
+        if effort:
+            body["reasoning_effort"] = effort
+        return body
+
+    def _effort(self, schema: type[BaseModel]) -> str:
+        """Thinking level for one call: "minimal" for the simple, code-checked steps (terminology edits,
+        vocabulary), the configured level for the record."""
+        if self.reasoning_effort and self.minimal_ok and schema.__name__ in LIGHT_SCHEMAS:
+            return "minimal"
+        return self.reasoning_effort
+
+    def _timeout_for(self, body: dict[str, Any]) -> float:
+        """Seconds to wait for one answer: enough for the input size, so a stalled request is given up on
+        (and another model tried) in about a minute rather than after CLOUD_TIMEOUT_SEC."""
+        chars = sum(len(m.get("content") or "") for m in body["messages"])
+        return min(float(self.timeout), CLOUD_MIN_TIMEOUT + chars / 1000)
+
+    async def _post(self, body: dict[str, Any]) -> httpx.Response:
+        """POST, with one short wait-and-retry on rate limits and server errors ("high demand"); after that the
+        caller tries another model, which is much faster than waiting for a busy one."""
+        url = f"{self.base_url}/chat/completions"
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        for attempt in range(CLOUD_BUSY_RETRIES + 1):
+            async with httpx.AsyncClient(timeout=self._timeout_for(body)) as client:
+                r = await client.post(url, headers=headers, json=body)
+            if r.status_code in BUSY and attempt < CLOUD_BUSY_RETRIES:
+                wait = min(float(r.headers.get("retry-after") or 0) or CLOUD_BUSY_WAIT, CLOUD_MAX_WAIT)
+                log.warning("cloud LLM HTTP %d; retrying in %.0f s", r.status_code, wait)
+                await asyncio.sleep(wait)
+                continue
+            return r
+        return r
+
+    async def _discover_model(self) -> str | None:
+        """Best available chat model for this key (newest "flash" model, else newest "pro"), or None."""
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                r = await client.get(f"{self.base_url}/models", headers={"Authorization": f"Bearer {self.api_key}"})
+            ids = [str(m.get("id", "")).removeprefix("models/") for m in r.json().get("data", [])]
+        except Exception as e:  # noqa: BLE001
+            log.warning("could not list cloud models (%r)", e)
+            return None
+        self._available = ids
+        return pick_chat_model(ids)
+
+    async def _busy_backup(self) -> str | None:
+        """Another chat model for this key, for when the current one stays overloaded (each has its own capacity
+        and free-tier quota). Tried models are not picked again within this job."""
+        self._tried.add(self.model)
+        if not self._available:
+            await self._discover_model()
+        return pick_chat_model([m for m in self._available if m not in self._tried])
+
+    async def _switch(self, why: str, notify: OnRetry | None) -> bool:
+        """Move to another model after the current one was busy or too slow; False when none is left."""
+        backup = await self._busy_backup()
+        if not backup:
+            return False
+        log.warning("cloud model %s %s; switching to %s", self.model, why, backup)
+        if notify:
+            await notify(f"{self.model} {why}, switching to {backup}")
+        BUSY_SWITCH[(self.base_url, self.requested)] = (backup, time.monotonic() + BUSY_SWITCH_SEC)
+        self.model = backup
+        return True
+
+    async def _call(self, messages: list[dict[str, str]], schema: type[BaseModel], max_tokens: int,
+                    notify: OnRetry | None = None) -> str:
+        """One completed call; adapts to providers that reject json_schema or reasoning_effort, to retired
+        models, and to a model that stays overloaded (switches to another cloud model, never to the local one)."""
+        for _ in range(8):
+            body = self._body(messages if not self.schema_in_prompt else _with_schema(messages, schema),
+                              schema, max_tokens)
+            try:
+                r = await self._post(body)
+            except httpx.TimeoutException as e:
+                if await self._switch(f"did not answer within {self._timeout_for(body):.0f} s", notify):
+                    continue
+                raise LLMUnavailable(f"{self.model} did not answer in time. Wait a minute and press Retry: "
+                                     "finished steps are kept.") from e
+            if r.status_code == 400:
+                text = r.text.lower()
+                about_effort = "reasoning" in text or "thinking" in text  # Gemini: "Thinking level ... not supported"
+                if about_effort and body.get("reasoning_effort") == "minimal" and self.minimal_ok:
+                    self.minimal_ok = False  # model without a "minimal" level: use the configured one
+                    continue
+                if about_effort and self.reasoning_effort:
+                    self.reasoning_effort = ""  # provider without that option
+                    continue
+                if not self.schema_in_prompt and ("schema" in text or "response_format" in text):
+                    self.schema_in_prompt = True
+                    continue
+            if r.status_code in (401, 403):
+                raise LLMUnavailable("The cloud model rejected the API key. Check the key and try again.")
+            if r.status_code in BUSY and await self._switch(f"is busy (HTTP {r.status_code})", notify):
+                continue
+            if r.status_code == 429:
+                raise LLMUnavailable("The cloud model's free-tier rate limit was reached. Wait a minute and retry.")
+            if r.status_code in BUSY:
+                raise LLMUnavailable("The cloud model is overloaded right now (Google says this is usually "
+                                     "temporary). Wait a minute and press Retry: finished steps are kept.")
+            if r.status_code == 404:
+                # Model retired or renamed: ask the provider which models this key can use and pick one.
+                replacement = await self._discover_model()
+                if replacement and replacement != self.model:
+                    log.warning("cloud model %s not found; using %s instead", self.model, replacement)
+                    RESOLVED_MODELS[(self.base_url, self.requested)] = replacement
+                    self.model = replacement
+                    continue
+                avail = ", ".join(self._available[:12]) or "none listed"
+                raise LLMUnavailable(f"Model '{self.model}' was not found. Models this key can use: {avail}. "
+                                     "Set GEMINI_MODEL to one of them.")
+            if r.status_code >= 400:
+                raise LLMUnavailable(f"Cloud model returned HTTP {r.status_code}: {r.text[:300]}")
+            data = r.json()
+            usage = data.get("usage") or {}
+            log.info("cloud llm %s %s: %s input, %s output tokens (%s thinking), effort=%s", self.model,
+                     schema.__name__, usage.get("prompt_tokens"), usage.get("completion_tokens"),
+                     (usage.get("completion_tokens_details") or {}).get("reasoning_tokens", "?"),
+                     body.get("reasoning_effort", "default"))
+            choice = (data.get("choices") or [{}])[0]
+            if choice.get("finish_reason") == "length":
+                log.warning("cloud LLM answer was cut off at max_tokens=%s", body["max_tokens"])
+            return (choice.get("message") or {}).get("content") or ""
+        raise LLMUnavailable("The cloud model rejected the request format.")
+
+    async def json_call(
+        self, model: str, system: str, user: str, schema: type[T], max_retries: int, max_tokens: int = 4096,
+        job_id: str = "-", on_retry: OnRetry | None = None,
+    ) -> T:
+        """Return a validated instance of `schema` from the cloud model."""
+        messages: list[dict[str, str]] = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+        last_error = ""
+        for attempt in range(max_retries + 1):
+            t0 = time.perf_counter()
+            try:
+                text = await self._call(messages, schema, max_tokens, on_retry)
+            except httpx.TransportError as e:  # a key means cloud only: never a silent switch to the local model
+                raise LLMUnavailable("Can't reach the cloud model. Check the internet connection and press Retry: "
+                                     "finished steps are kept.") from e
+            log.info("cloud llm %s attempt=%d schema=%s latency=%.1fs", self.model, attempt, schema.__name__,
+                     time.perf_counter() - t0, extra={"job_id": job_id})
+            try:
+                return parse_output(text, schema)
+            except InvalidModelOutput as e:
+                last_error = str(e)
+                log.warning("invalid %s output from %s: %s", schema.__name__, self.model, last_error,
+                            extra={"job_id": job_id})
+                if attempt < max_retries and on_retry:
+                    await on_retry(f"model returned invalid JSON, retrying ({attempt + 2} of {max_retries + 1})")
+                messages = messages + [
+                    {"role": "assistant", "content": text[:4000]},
+                    {"role": "user", "content": REPAIR_MESSAGE.format(error=last_error)},
+                ]
+        raise InvalidModelOutput(f"{self.model} returned invalid JSON {max_retries + 1} times: {last_error}")
+
+
+LIGHT_SCHEMAS = {"LM1Output", "Vocabulary"}  # steps whose every output is re-checked by code
+BUSY = (429, 500, 502, 503, 504)
+CLOUD_BUSY_RETRIES = 1  # one short wait, then another model (a busy model often stays busy for minutes)
+CLOUD_BUSY_WAIT = 2.0
+CLOUD_MAX_WAIT = 10.0  # cap on the provider's retry-after
+CLOUD_MIN_TIMEOUT = 60.0  # seconds for a short request; +1 s per 1000 characters of input
+BUSY_SWITCH: dict[tuple[str, str], tuple[str, float]] = {}  # (url, requested) -> (model that answered, until)
+BUSY_SWITCH_SEC = 15 * 60
+
+NOT_CHAT = ("embed", "image", "tts", "audio", "live", "vision", "aqa", "veo", "imagen", "learnlm", "robotics",
+            "computer-use", "native", "transcribe", "lyria", "nano", "gemma")
+
+
+def pick_chat_model(ids: list[str]) -> str | None:
+    """Newest general chat model: prefer "flash" (fast), skip "lite", previews/experiments if a stable one exists."""
+    def version(m: str) -> tuple[float, ...]:
+        nums = re.findall(r"(\d+(?:\.\d+)?)", m)
+        return tuple(float(n) for n in nums[:2]) or (0.0,)
+
+    chat = [m for m in ids if m.startswith("gemini") and not any(x in m for x in NOT_CHAT)] or \
+           [m for m in ids if not any(x in m for x in NOT_CHAT)]
+    for want in ("flash", "pro", ""):
+        pool = [m for m in chat if want in m and "lite" not in m] or [m for m in chat if want in m]
+        stable = [m for m in pool if not re.search(r"preview|exp|latest|\d{2}-\d{2}", m)] or pool
+        if stable:
+            return max(stable, key=lambda m: (version(m), -len(m)))
+    return None
+
+
+def _with_schema(messages: list[dict[str, str]], schema: type[BaseModel]) -> list[dict[str, str]]:
+    """Messages with the JSON structure appended to the last user turn (for plain JSON mode)."""
+    import json
+
+    out = [dict(m) for m in messages]
+    out[-1]["content"] += "\n\nReturn JSON with exactly this structure (JSON Schema):\n" + json.dumps(
+        inline_schema(schema), ensure_ascii=False)
+    return out

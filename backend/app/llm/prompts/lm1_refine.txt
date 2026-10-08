@@ -16,8 +16,10 @@ HARD INVARIANTS (an edit that breaks any of these is forbidden)
 1. Numbers, quantities, dates, times, versions, money: never change their value.
 2. Negation and modality: never add, remove, or move "not", "no", "never", "n't",
    "can't", "won't", "might", "should", "must", "maybe".
-3. People's names: keep them as heard. Place, institution and company names MAY be corrected to their
-   standard spelling when the heard form sounds the same ("Guhati" -> "Guwahati", "Banglore" -> "Bangalore").
+3. People's names: keep them as heard. Everything else that is a real-world name - places, institutions,
+   companies, products, tools, technical terms - SHOULD be corrected to its standard spelling when the heard
+   form sounds the same. Use your own knowledge; no list is needed ("Guhati" -> "Guwahati",
+   "Banglore" -> "Bangalore", "fast API" -> "FastAPI", "pie torch" -> "PyTorch", "get hub" -> "GitHub").
 4. Commitments and hedges stay exactly as strong or weak as spoken
    ("I'll try" stays "I'll try", not "I will").
 5. Grammar, filler words, false starts, and speaking style: do not fix them.

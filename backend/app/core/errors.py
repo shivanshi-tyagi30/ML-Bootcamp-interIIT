@@ -33,6 +33,8 @@ ERROR_TABLE: dict[str, ErrorSpec] = {
     "E_LM1_FAILED": {"http": 500, "message": "Transcript refinement failed. The raw transcript is still available."},
     "E_LM2_FAILED": {"http": 500, "message": "Writing the meeting record failed. Both transcripts are still available."},
     "E_RENDER_FAILED": {"http": 500, "message": "The record was created but the downloads could not be generated."},
+    "E_NEEDS_KEY": {"http": 400, "message": "This website writes the minutes with Gemini. Paste your free Gemini "
+                    "API key (aistudio.google.com -> Get API key) in the API key box, then upload again."},
     "E_BUSY": {"http": 429, "message": "The server is busy with other uploads. Please try again in a moment."},
     "E_NOT_FOUND": {"http": 404, "message": "This meeting could not be found."},
     "E_JOB_RUNNING": {"http": 409, "message": "This meeting is still being processed. Try again when it has finished."},

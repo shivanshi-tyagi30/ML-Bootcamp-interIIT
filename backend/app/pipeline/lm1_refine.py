@@ -11,7 +11,7 @@ from app.core.stages import Stage
 from app.llm.client import LLMUnavailable, load_prompt
 from app.llm.json_repair import InvalidModelOutput
 from app.models.llm_io import LM1Output
-from app.pipeline.lm1_vocabulary import vocabulary_json
+from app.pipeline.lm1_vocabulary import make_room_for, vocabulary_json
 
 if TYPE_CHECKING:
     from app.pipeline.runner import JobContext
@@ -61,13 +61,14 @@ async def refine(ctx: "JobContext") -> None:
     """Stage function: write 07_lm1_edits.json; invalid output after retries is E_LM1_FAILED."""
     segs = ctx.read(ctx.output_name(Stage.RAW_SAVED))
     vocab = ctx.read(ctx.output_name(Stage.VOCABULARY)) or {"domain": "unknown", "terms": []}
+    await make_room_for(ctx, ctx.settings.LM1_MODEL)
     system = load_prompt("lm1_refine")
-    wins = windows(len(segs), ctx.settings.LM1_WINDOW_SEGMENTS, ctx.settings.LM1_CONTEXT_SEGMENTS)
-    max_tokens = MAX_EDIT_TOKENS_SHORT if len(segs) <= ctx.settings.LM1_WINDOW_SEGMENTS else MAX_EDIT_TOKENS_FULL
+    wins = windows(len(segs), ctx.lm1_window(), ctx.settings.LM1_CONTEXT_SEGMENTS)
+    max_tokens = MAX_EDIT_TOKENS_SHORT if len(segs) <= ctx.lm1_window() else MAX_EDIT_TOKENS_FULL
     edits: list[dict[str, Any]] = []
     domains: list[str] = []
     for k, win in enumerate(wins):
-        label = f"Refining terminology (window {k + 1} of {len(wins)})"
+        label = f"Refining terminology with {getattr(ctx.llm, 'name', ctx.settings.LM1_MODEL)} (window {k + 1} of {len(wins)})"
         await ctx.progress(k / max(1, len(wins)), label)
         target_ids = {segs[i]["id"] for i in win[1]}
 

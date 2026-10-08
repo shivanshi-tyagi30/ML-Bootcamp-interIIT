@@ -149,9 +149,35 @@ def default_stt(settings: Settings) -> WhisperSTT:
     return _default
 
 
+def stt_for(settings: Settings) -> Any:
+    """Whisper on this machine, or Whisper large-v3 on Groq (STT_BACKEND=groq)."""
+    if settings.STT_BACKEND == "groq":
+        from app.pipeline.cloud_speech import GroqWhisperSTT
+
+        return GroqWhisperSTT(settings)
+    return default_stt(settings)
+
+
+def _start_cloud_speakers(ctx: "JobContext") -> None:
+    """AssemblyAI speaker labels: start the job now so it runs while Whisper transcribes (best effort)."""
+    from app.pipeline.cloud_speech import AssemblyAIDiarizer
+
+    try:
+        tid = AssemblyAIDiarizer(ctx.settings).submit(ctx.wav_path, ctx.settings.DIARIZATION_NUM_SPEAKERS)
+        ctx.write("assemblyai.json", {"id": tid})
+    except Exception as e:  # noqa: BLE001 - DIARIZING tries again and never fails the job
+        ctx.log.warning("AssemblyAI speaker labels not started: %r", e)
+
+
 async def transcribe(ctx: "JobContext") -> None:
     """Stage function: write 03_whisper.json."""
-    stt = ctx.services.stt or default_stt(ctx.settings)
+    stt = ctx.services.stt or stt_for(ctx.settings)
+    s = ctx.settings
+    if (ctx.services.diarizer is None and s.DIARIZATION_ENABLED and s.DIARIZATION_BACKEND == "assemblyai"
+            and ctx.read("assemblyai.json") is None):
+        speakers = asyncio.create_task(asyncio.to_thread(_start_cloud_speakers, ctx))
+    else:
+        speakers = None
     prompt = glossary_prompt(ctx.upload.get("glossary", []))
     if not getattr(stt, "loaded", True):
         await ctx.progress(0.0, "Preparing the speech model")
@@ -170,7 +196,11 @@ async def transcribe(ctx: "JobContext") -> None:
     except PipelineError:
         raise
     except Exception as e:  # noqa: BLE001 - any model failure is E_STT_FAILED
-        raise PipelineError("E_STT_FAILED", Stage.TRANSCRIBING, repr(e)) from e
+        detail = str(e) if isinstance(e, RuntimeError) else repr(e)  # cloud errors are already readable
+        raise PipelineError("E_STT_FAILED", Stage.TRANSCRIBING, detail) from e
+    finally:
+        if speakers is not None:
+            await speakers
     kept, dropped = apply_hallucination_guards(result.get("segments", []))
     if not kept or not any(s["words"] for s in kept):
         raise PipelineError("E_NO_SPEECH", Stage.TRANSCRIBING, "no segments after guards")

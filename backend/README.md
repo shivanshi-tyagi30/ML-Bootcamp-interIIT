@@ -86,20 +86,41 @@ python -m app.prefetch        # downloads every model once (Whisper, speaker mod
 uvicorn app.main:app --port 8000
 ```
 
-`.env.cpu` picks settings that keep quality while cutting time on CPU:
+Two laptop profiles:
 
-| Setting | CPU profile | Why |
-|---|---|---|
-| Whisper | `large-v3-turbo`, int8, beam 1, all cores (`auto`) | about 6x faster than large-v3 on CPU, near-equal accuracy |
-| LM1 | `qwen3:4b`, thinking off | Qwen3 otherwise writes long hidden reasoning before every answer |
-| LM2 | `gemma3:4b`, `LM2_SCRATCHPAD=false` | small and fast on CPU; no scratchpad halves the output; the verifier still checks every item |
-| Loading | both models stay loaded (`LM1_UNLOAD_BEFORE_LM2=false`, `OLLAMA_KEEP_ALIVE=-1m`) | nothing reloads between steps or between users |
-| LM1 windows | `LM1_WINDOW_SEGMENTS=120` | a 5-10 minute meeting is refined in one call |
-| Context | `num_ctx` sized per call (8k/16k/32k) | Ollama's 2-4k default silently cut long prompts |
-| Re-check | off (NeMo does not install on Windows) | low-confidence words are marked disputed instead |
+| Setting | `.env.cpu` (best quality, 16 GB RAM) | `.env.cpu-fast` (quicker) | Why |
+|---|---|---|---|
+| Whisper | `large-v3-turbo`, int8, **beam 5** | `large-v3-turbo`, int8, beam 1 | turbo is close to large-v3 accuracy at a fraction of the CPU time; beam search adds accuracy cheaply |
+| Speakers | pyannote when `HF_TOKEN` is set, else ECAPA | ECAPA | pyannote handles short replies and overlap better |
+| LM1 | `qwen3:8b`, thinking off | `qwen3:4b`, thinking off | the 8B model knows far more names, places and technical terms |
+| LM2 | `gemma3:12b`, scratchpad on | `gemma3:4b`, scratchpad off | the 12B model separates decisions, proposals and tasks much better; the scratchpad makes it gather evidence first |
+| Memory | one LLM in memory at a time (`LM1_UNLOAD_BEFORE_LM2=true`) | both stay loaded | 8B + 12B do not fit in 16 GB together; swapping to disk would be far slower than reloading |
+| LM1 windows | `LM1_WINDOW_SEGMENTS=120` | same | a 5-10 minute meeting is refined in one call |
+| Context | `num_ctx` sized per call (8k/12k/16k/32k) | same | Ollama's 2-4k default silently cut long prompts |
+| Re-check | off (NeMo does not install on Windows) | same | low-confidence words are marked disputed instead |
 
-Stage times are written to `data/jobs/{id}/timings.json`. For more polished wording at roughly 2-3x the
-writing time, use `qwen3:8b` / `gemma3:12b` (and `LM1_UNLOAD_BEFORE_LM2=true` on 16 GB RAM).
+`.env.cpu` takes roughly 2-3x longer than `.env.cpu-fast` on the same laptop; with an NVIDIA GPU the defaults
+(`.env.example`) are both faster and higher quality. Stage times are written to `data/jobs/{id}/timings.json`
+and shown in the workspace header.
+
+## Cloud model (Gemini or any OpenAI-compatible API)
+
+One cloud model can do both LM1 and LM2: much stronger than a laptop model and far faster on CPU-only machines.
+Get a free key at aistudio.google.com, then either `copy .env.gemini .env` and paste it as `GEMINI_API_KEY`, or
+paste it in the app's API key box (it is sent only with uploads, kept in server memory, never written to disk).
+
+- The record is written from `app/llm/prompts/lm2_document_cloud.txt`, a full minute-taking brief (executive
+  summary, topic-by-topic minutes with positions and reasons, decisions, tasks, speaker checks). Small local
+  models keep the shorter `lm2_document.txt`. A test runs the brief's own example through the verifier.
+- The request asks for the exact record structure (`json_schema`); providers that reject it get JSON mode with
+  the structure in the prompt. The guard, verifier and speaker-name checks still check every edit and item.
+- With a key, the cloud model is the only language model: the local Ollama model runs only for uploads without a
+  key. A busy model (HTTP 503 "high demand") is retried, then another cloud model the key can use takes over. A bad
+  key, no internet or every model busy give a clear error, and Retry continues from the failed step.
+- Re-uploading a file reuses the earlier result only if it was made the same way (cloud or local).
+- `GEMINI_MODEL`, `CLOUD_BASE_URL` (e.g. `https://api.openai.com/v1` for GPT), `CLOUD_REASONING_EFFORT`,
+  `CLOUD_TIMEOUT_SEC` configure it. Free tiers have rate limits, and transcript text is
+  sent to the provider.
 
 ## Deploying (no user ever waits for a model)
 

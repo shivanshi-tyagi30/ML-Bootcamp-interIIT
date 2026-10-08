@@ -18,9 +18,13 @@ from app.core.errors import PipelineError, user_message
 from app.core.events import TERMINAL
 from app.core.stages import STAGE_MESSAGES, STAGE_OUTPUT, Stage
 from app.core.storage import job_dir, read_json, write_json
-from app.models.api import CreateJobResponse, JobDetail, JobList, JobSummary, PartialResults, RenameRequest
+from app.models.api import (
+    CreateJobResponse, EditsRequest, JobDetail, JobList, JobSummary, PartialResults, RenameRequest,
+)
 from app.models.record import MeetingRecord, Refinement, Segment
-from app.pipeline.runner import dump_event, rename_record, request_cancel
+from app.pipeline.runner import (
+    EDITED_TRANSCRIPTS, dump_event, has_api_key, remember_api_key, rename_record, request_cancel, save_edits,
+)
 from app.pipeline.validate import extension_of, stream_upload, validate_file
 
 router = APIRouter(prefix="/api", tags=["jobs"])
@@ -35,16 +39,31 @@ def default_title(filename: str, title: str | None) -> str:
     return f"{filename} – {d.day} {d:%b %Y}"[:100]
 
 
+def made_with_cloud(jobs_dir: Path, job_id: str) -> bool:
+    """Whether a finished job's record was written by the cloud model (so a re-upload reuses it only when
+    it would be made the same way: a key -> cloud, no key -> local)."""
+    rec = read_json(job_dir(jobs_dir, job_id) / STAGE_OUTPUT[Stage.VERIFYING]) or {}
+    return "(cloud)" in str((rec.get("meta") or {}).get("models", {}).get("lm2", ""))
+
+
 @router.post("/jobs", status_code=202, response_model=CreateJobResponse)
 async def create_job(
+    request: Request,
     file: UploadFile = File(...),
     title: str | None = Form(None),
     glossary: str | None = Form(None),
+    api_key: str | None = Form(None),
     force: bool = Query(False),
     state: AppState = Depends(get_state),
 ) -> Any:
     """Upload a recording. Validation errors return immediately; processing runs in the background."""
     s = state.settings
+    effective_key = (api_key or request.headers.get("x-gemini-key") or request.headers.get("x-api-key")
+                     or getattr(s, "GEMINI_API_KEY", "") or "").strip()
+    if s.setup_problems():  # a server set up without its speech keys: say so instead of failing every job
+        return JSONResponse(status_code=503, content={"code": "E_SERVER_SETUP", "message": " ".join(s.setup_problems())})
+    if not effective_key and not s.LOCAL_LLM_ENABLED:
+        return error_response("E_NEEDS_KEY")  # before the upload is stored: nothing to clean up
     if state.active_uploads >= s.MAX_CONCURRENT_UPLOADS:
         return error_response("E_BUSY")
     state.active_uploads += 1
@@ -62,7 +81,7 @@ async def create_job(
 
         if not force:
             cached = await state.db.find_completed_by_sha(info["sha256"])
-            if cached:
+            if cached and made_with_cloud(s.jobs_dir, cached["id"]) == bool(effective_key):
                 shutil.rmtree(d, ignore_errors=True)
                 return JSONResponse(status_code=200, content={"job_id": cached["id"], "status": "completed",
                                                               "cached": True})
@@ -73,6 +92,8 @@ async def create_job(
             **info, "job_id": job_id, "title": job_title, "source_file": filename, "glossary": terms,
             "uploaded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         })
+        if effective_key:
+            remember_api_key(job_id, effective_key)  # memory only: a key is never written to disk
         await state.db.insert({
             "id": job_id, "title": job_title, "source_file": filename, "file_sha256": info["sha256"],
             "status": "queued", "stage": Stage.QUEUED.value,
@@ -111,8 +132,10 @@ async def get_job(job_id: str, state: AppState = Depends(get_state)) -> Any:
         job=JobSummary.from_row(row),
         record=MeetingRecord(**rec) if rec else None,
         partial=PartialResults(
-            raw_transcript=_segments(d / STAGE_OUTPUT[Stage.RAW_SAVED]),
-            refined_transcript=_segments(d / "refined_transcript.json"),
+            raw_transcript=_segments(d / EDITED_TRANSCRIPTS["raw_transcript"])
+            or _segments(d / STAGE_OUTPUT[Stage.RAW_SAVED]),
+            refined_transcript=_segments(d / EDITED_TRANSCRIPTS["refined_transcript"])
+            or _segments(d / "refined_transcript.json"),
             refinement=Refinement(**refinement) if refinement else None,
         ),
         timings=read_json(d / "timings.json") or None,
@@ -179,6 +202,18 @@ async def rename_job(job_id: str, body: RenameRequest, state: AppState = Depends
     return JobSummary.from_row(await state.db.get(job_id))  # type: ignore[arg-type]
 
 
+@router.put("/jobs/{job_id}/edits", status_code=204, response_model=None, response_class=Response)
+async def put_edits(job_id: str, body: EditsRequest, state: AppState = Depends(get_state)) -> Any:
+    """Save hand corrections (words, lines, speaker names) so the page and every download show them."""
+    row = await get_job_or_none(state, job_id)
+    if row is None:
+        return error_response("E_NOT_FOUND")
+    if row["status"] in ("queued", "running"):
+        return error_response("E_JOB_RUNNING")
+    await asyncio.to_thread(save_edits, state.settings.jobs_dir, job_id, body.model_dump(mode="json", exclude_none=True))
+    return Response(status_code=204)
+
+
 @router.delete("/jobs/{job_id}", status_code=204, response_model=None, response_class=Response)
 async def delete_job(job_id: str, state: AppState = Depends(get_state)) -> Any:
     """Delete a meeting and its files; refused while it is processing."""
@@ -219,8 +254,13 @@ async def cancel_job(job_id: str, state: AppState = Depends(get_state)) -> Any:
 
 
 @router.post("/jobs/{job_id}/retry", status_code=202, response_model=JobSummary)
-async def retry_job(job_id: str, state: AppState = Depends(get_state)) -> Any:
-    """Run a failed or cancelled job again, resuming after the last saved stage."""
+async def retry_job(job_id: str, request: Request, api_key: str | None = Form(None),
+                    state: AppState = Depends(get_state)) -> Any:
+    """Run a failed or cancelled job again, resuming after the last saved stage.
+
+    The cloud API key is sent again with the retry: keys live in memory only, so a restarted server
+    would otherwise retry on the local model.
+    """
     row = await get_job_or_none(state, job_id)
     if row is None:
         return error_response("E_NOT_FOUND")
@@ -228,6 +268,11 @@ async def retry_job(job_id: str, state: AppState = Depends(get_state)) -> Any:
         return error_response("E_JOB_RUNNING")
     if row["status"] == "completed":
         return JobSummary.from_row(row)
+    key = (api_key or request.headers.get("x-gemini-key") or "").strip()
+    if key:
+        remember_api_key(job_id, key)
+    elif not state.settings.LOCAL_LLM_ENABLED and not has_api_key(job_id) and not state.settings.GEMINI_API_KEY:
+        return error_response("E_NEEDS_KEY")
     await state.db.update(job_id, status="queued", stage="queued", error_code=None, error_message=None,
                           error_detail=None)
     state.schedule(job_id)

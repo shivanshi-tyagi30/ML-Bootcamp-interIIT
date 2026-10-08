@@ -113,14 +113,36 @@ class JobContext:
 
     @property
     def llm(self) -> JSONLLM:
-        """LLM client (created on first use)."""
+        """LLM client (created on first use): the cloud model when an API key was given, else local Ollama.
+
+        Never both: with a key every LM call goes to the cloud, and a cloud failure is shown, not hidden behind
+        the much slower local model.
+        """
         if self._llm is None:
             s = self.settings
-            self._llm = LLMClient(
-                s.LLM_BASE_URL, s.LLM_BACKEND, s.LLM_TIMEOUT_SEC, {s.LM2_MODEL: s.LM2_BASE_URL},
-                max_context=s.LLM_MAX_CONTEXT, keep_alive=s.OLLAMA_KEEP_ALIVE,
-            )
+            api_key = (JOB_API_KEYS.get(self.job_id) or s.GEMINI_API_KEY or "").strip()
+            if api_key:
+                from app.llm.client import GeminiClient
+
+                self._llm = GeminiClient(api_key=api_key, model=s.GEMINI_MODEL, timeout=s.CLOUD_TIMEOUT_SEC,
+                                         base_url=s.CLOUD_BASE_URL, reasoning_effort=s.CLOUD_REASONING_EFFORT)
+            else:
+                self._llm = LLMClient(
+                    s.LLM_BASE_URL, s.LLM_BACKEND, s.LLM_TIMEOUT_SEC, {s.LM2_MODEL: s.LM2_BASE_URL},
+                    max_context=s.LLM_MAX_CONTEXT, keep_alive=s.OLLAMA_KEEP_ALIVE,
+                )
         return self._llm
+
+    @property
+    def cloud(self) -> bool:
+        """Whether the cloud model handles LM1 and LM2 for this job."""
+        from app.llm.client import GeminiClient
+
+        return isinstance(self.llm, GeminiClient)
+
+    def lm1_window(self) -> int:
+        """Segments per LM1 call: a cloud model reads a whole long meeting at once."""
+        return max(self.settings.LM1_WINDOW_SEGMENTS, CLOUD_LM1_WINDOW) if self.cloud else self.settings.LM1_WINDOW_SEGMENTS
 
     def add_warning(self, code: str) -> None:
         """Record a warning such as W_NON_ENGLISH (shown in events and meta)."""
@@ -211,6 +233,22 @@ assert [s for s, _ in PIPELINE] == PIPELINE_STAGES
 # One job on the GPU at a time. Created per event loop (tests use several loops).
 _locks: dict[int, asyncio.Semaphore] = {}
 
+# job_id -> cloud API key pasted in the app for that job. Memory only; never written to disk.
+JOB_API_KEYS: dict[str, str] = {}
+CLOUD_LM1_WINDOW = 400  # ~30-40 minutes of meeting in one refine call on a cloud model
+CLOUD_LM2_INPUT_TOKENS = 200_000  # cloud models read very long transcripts in one call
+
+
+def remember_api_key(job_id: str, key: str) -> None:
+    """Keep a job's cloud API key in memory (also used by Retry while the server runs)."""
+    JOB_API_KEYS[job_id] = key
+
+
+def has_api_key(job_id: str) -> bool:
+    """Whether a cloud API key for this job is in memory (lost when the server restarts)."""
+    return bool(JOB_API_KEYS.get(job_id))
+
+
 # job_id -> event set when the user cancels; worker threads poll it.
 CANCEL_EVENTS: dict[str, threading.Event] = {}
 
@@ -284,6 +322,35 @@ def rename_record(jobs_dir: Path, job_id: str, title: str) -> bool:
     write_json(d / STAGE_OUTPUT[Stage.VERIFYING], rec)
     if (d / "exports").exists():
         render_exports(rec, d / "exports")
+    return True
+
+
+EDITED_TRANSCRIPTS = {"raw_transcript": "raw_transcript.edited.json",
+                      "refined_transcript": "refined_transcript.edited.json"}
+
+
+def save_edits(jobs_dir: Path, job_id: str, edits: dict[str, Any]) -> bool:
+    """Store the user's hand corrections and regenerate every export from them.
+
+    With a record: the record is updated (the untouched original is kept once as record.original.json) and
+    exports are rebuilt. Without one (writing the record failed): the corrected transcripts are kept next to
+    the pipeline's own files, which stay untouched so Retry still resumes correctly. False: nothing to save.
+    """
+    d = job_dir(jobs_dir, job_id)
+    edits = {k: v for k, v in edits.items() if v is not None}
+    if not edits:
+        return False
+    data = read_json(d / STAGE_OUTPUT[Stage.VERIFYING])
+    if data is None:
+        for key, name in EDITED_TRANSCRIPTS.items():
+            if key in edits:
+                write_json(d / name, edits[key])
+        return any(k in edits for k in EDITED_TRANSCRIPTS)
+    if not (d / "record.original.json").exists():
+        write_json(d / "record.original.json", data)
+    rec = MeetingRecord(**{**data, **edits})
+    write_json(d / STAGE_OUTPUT[Stage.VERIFYING], rec)
+    render_exports(rec, d / "exports")
     return True
 
 

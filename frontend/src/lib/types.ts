@@ -60,7 +60,8 @@ export type VerifierFlag =
   | "deadline_downgraded"
   | "pointer_invalid"
   | "audio_unclear"
-  | "self_assignment_unverified";
+  | "self_assignment_unverified"
+  | "owner_from_speaker";
 
 export interface ActionItem {
   id: string;
@@ -162,6 +163,8 @@ export type ErrorCode =
   | "E_LM1_FAILED"
   | "E_LM2_FAILED"
   | "E_RENDER_FAILED"
+  | "E_NEEDS_KEY"
+  | "E_SERVER_SETUP"
   | "E_BUSY"
   | "E_NOT_FOUND"
   | "E_JOB_RUNNING"
@@ -221,7 +224,9 @@ export interface JobState {
 export interface Health {
   status: string;
   ffmpeg?: boolean;
-  llm?: { backend: string; host: string; reachable: boolean | null; missing: string[] };
+  llm?: { backend: string; host: string; reachable: boolean | null; missing: string[]; cloud?: string; key_required?: boolean };
+  /** Server settings that make every upload fail (e.g. a missing cloud speech key). */
+  setup_problems?: string[];
   whisper?: { model: string; device: string; compute_type: string; beam_size: number };
   gpu?: boolean;
 }

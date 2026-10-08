@@ -99,7 +99,8 @@ async def job_export(
 
     if data is None:  # no record: only the transcripts can be downloaded
         source = {"txt_raw": STAGE_OUTPUT[Stage.RAW_SAVED], "txt_refined": "refined_transcript.json"}.get(fmt)
-        segs = read_json(d / source) if source else None
+        edited = {"txt_raw": "raw_transcript.edited.json", "txt_refined": "refined_transcript.edited.json"}.get(fmt)
+        segs = (read_json(d / edited) if edited else None) or (read_json(d / source) if source else None)
         if not isinstance(segs, list):
             return error_response("E_NOT_FOUND")
         return Response(transcript_txt([Segment(**s) for s in segs]), media_type=media, headers=headers)
