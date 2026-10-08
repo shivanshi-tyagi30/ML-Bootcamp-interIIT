@@ -244,6 +244,11 @@ def remember_api_key(job_id: str, key: str) -> None:
     JOB_API_KEYS[job_id] = key
 
 
+def has_api_key(job_id: str) -> bool:
+    """Whether a cloud API key for this job is in memory (lost when the server restarts)."""
+    return bool(JOB_API_KEYS.get(job_id))
+
+
 # job_id -> event set when the user cancels; worker threads poll it.
 CANCEL_EVENTS: dict[str, threading.Event] = {}
 

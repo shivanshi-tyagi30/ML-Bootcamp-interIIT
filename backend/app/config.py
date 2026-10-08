@@ -57,6 +57,8 @@ class Settings(BaseSettings):
     LM2_BASE_URL: str = ""  # optional: separate server for LM2 (vLLM serves one model per server)
     # Cloud LLM (one model for LM1 and LM2). Used when a key is set here or pasted in the app.
     GEMINI_API_KEY: str = ""
+    # False on a hosted website without Ollama: every upload must bring a cloud API key (else E_NEEDS_KEY).
+    LOCAL_LLM_ENABLED: bool = True
     GEMINI_MODEL: str = "gemini-2.5-flash"
     # Any OpenAI-compatible endpoint works (e.g. https://api.openai.com/v1 with a GPT model).
     CLOUD_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta/openai"

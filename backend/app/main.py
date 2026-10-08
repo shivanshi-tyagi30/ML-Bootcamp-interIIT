@@ -85,7 +85,7 @@ async def warmup(settings: Settings, services: Services) -> list[str]:
         except Exception as e:  # noqa: BLE001
             log.warning("warm-up: speaker model not loaded (%r)", e)
             failed.append("speaker model")
-    if services.llm is None and not settings.GEMINI_API_KEY:  # a cloud model needs no loading
+    if services.llm is None and not settings.GEMINI_API_KEY and settings.LOCAL_LLM_ENABLED:  # cloud: nothing to load
         client = LLMClient(settings.LLM_BASE_URL, settings.LLM_BACKEND, settings.LLM_TIMEOUT_SEC,
                            keep_alive=settings.OLLAMA_KEEP_ALIVE)
         # One-model-at-a-time mode: only LM1 (used first in every job) is preloaded; LM2 loads when needed.
@@ -135,7 +135,7 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     app.state.trace = state
     app.add_middleware(
         CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=False,
-        allow_methods=["GET", "POST", "PATCH", "DELETE"], allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"], allow_headers=["*"],
         expose_headers=["Content-Disposition", "Content-Range", "Accept-Ranges"],
     )
     app.include_router(routes_jobs.router)
@@ -159,6 +159,8 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         models = list(dict.fromkeys([settings.LM1_MODEL, settings.LM2_MODEL]))
         if settings.GEMINI_API_KEY:  # cloud model configured on the server
             llm = {"reachable": None, "missing": [], "cloud": settings.GEMINI_MODEL}
+        elif not settings.LOCAL_LLM_ENABLED:  # hosted website: each user brings a key
+            llm = {"reachable": None, "missing": [], "key_required": True}
         elif settings.LLM_BACKEND == "ollama":
             llm = await ollama_status(settings.ollama_host, models)
         else:

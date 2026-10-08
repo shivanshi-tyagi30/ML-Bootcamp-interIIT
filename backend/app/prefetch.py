@@ -81,7 +81,7 @@ def main() -> int:
             ok &= _step("pyannote speaker model", lambda: fetch_pyannote(s))
         else:
             ok &= _step(f"speaker model {s.ECAPA_MODEL}", lambda: fetch_ecapa(s))
-    if s.LLM_BACKEND == "ollama":
+    if s.LLM_BACKEND == "ollama" and s.LOCAL_LLM_ENABLED and not s.GEMINI_API_KEY:
         for m in dict.fromkeys([s.LM1_MODEL, s.LM2_MODEL]):
             ok &= _step(f"Ollama {m}", lambda m=m: asyncio.run(pull_ollama(s, m)))
     print("All models are ready." if ok else "Some models are missing; see FAILED above.", flush=True)

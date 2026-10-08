@@ -23,7 +23,7 @@ from app.models.api import (
 )
 from app.models.record import MeetingRecord, Refinement, Segment
 from app.pipeline.runner import (
-    EDITED_TRANSCRIPTS, dump_event, remember_api_key, rename_record, request_cancel, save_edits,
+    EDITED_TRANSCRIPTS, dump_event, has_api_key, remember_api_key, rename_record, request_cancel, save_edits,
 )
 from app.pipeline.validate import extension_of, stream_upload, validate_file
 
@@ -58,6 +58,10 @@ async def create_job(
 ) -> Any:
     """Upload a recording. Validation errors return immediately; processing runs in the background."""
     s = state.settings
+    effective_key = (api_key or request.headers.get("x-gemini-key") or request.headers.get("x-api-key")
+                     or getattr(s, "GEMINI_API_KEY", "") or "").strip()
+    if not effective_key and not s.LOCAL_LLM_ENABLED:
+        return error_response("E_NEEDS_KEY")  # before the upload is stored: nothing to clean up
     if state.active_uploads >= s.MAX_CONCURRENT_UPLOADS:
         return error_response("E_BUSY")
     state.active_uploads += 1
@@ -73,8 +77,6 @@ async def create_job(
             shutil.rmtree(d, ignore_errors=True)
             return JSONResponse(status_code=e.http_status, content={"code": e.code, "message": e.user_message})
 
-        effective_key = (api_key or request.headers.get("x-gemini-key") or request.headers.get("x-api-key")
-                         or getattr(s, "GEMINI_API_KEY", "") or "").strip()
         if not force:
             cached = await state.db.find_completed_by_sha(info["sha256"])
             if cached and made_with_cloud(s.jobs_dir, cached["id"]) == bool(effective_key):
@@ -267,6 +269,8 @@ async def retry_job(job_id: str, request: Request, api_key: str | None = Form(No
     key = (api_key or request.headers.get("x-gemini-key") or "").strip()
     if key:
         remember_api_key(job_id, key)
+    elif not state.settings.LOCAL_LLM_ENABLED and not has_api_key(job_id) and not state.settings.GEMINI_API_KEY:
+        return error_response("E_NEEDS_KEY")
     await state.db.update(job_id, status="queued", stage="queued", error_code=None, error_message=None,
                           error_detail=None)
     state.schedule(job_id)
