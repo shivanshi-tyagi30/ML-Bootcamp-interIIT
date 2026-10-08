@@ -20,7 +20,7 @@ from app.core.stages import STAGE_MESSAGES, STAGE_OUTPUT, Stage
 from app.core.storage import job_dir, read_json, write_json
 from app.models.api import CreateJobResponse, JobDetail, JobList, JobSummary, PartialResults, RenameRequest
 from app.models.record import MeetingRecord, Refinement, Segment
-from app.pipeline.runner import dump_event, rename_record, request_cancel
+from app.pipeline.runner import dump_event, remember_api_key, rename_record, request_cancel
 from app.pipeline.validate import extension_of, stream_upload, validate_file
 
 router = APIRouter(prefix="/api", tags=["jobs"])
@@ -75,8 +75,9 @@ async def create_job(
         write_json(d / STAGE_OUTPUT[Stage.VALIDATING], {
             **info, "job_id": job_id, "title": job_title, "source_file": filename, "glossary": terms,
             "uploaded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "api_key": effective_key,
         })
+        if effective_key:
+            remember_api_key(job_id, effective_key)  # memory only: a key is never written to disk
         await state.db.insert({
             "id": job_id, "title": job_title, "source_file": filename, "file_sha256": info["sha256"],
             "status": "queued", "stage": Stage.QUEUED.value,

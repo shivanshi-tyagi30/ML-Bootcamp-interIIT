@@ -124,7 +124,10 @@ async def document(ctx: "JobContext") -> None:
     )
     await make_room_for(ctx, s.LM2_MODEL)  # LM1 is done; don't keep both models in RAM
     try:
-        budget = s.LM2_MAX_INPUT_TOKENS - estimate_tokens(system) - 2000
+        from app.pipeline.runner import CLOUD_LM2_INPUT_TOKENS
+
+        max_input = CLOUD_LM2_INPUT_TOKENS if getattr(ctx, "cloud", False) else s.LM2_MAX_INPUT_TOKENS
+        budget = max_input - estimate_tokens(system) - 2000
         if estimate_tokens("\n".join(lines)) <= budget:
             await ctx.progress(0.1, f"Writing the meeting record with {s.LM2_MODEL}")
             out = await call(user_message(lines, record_schema, candidates))

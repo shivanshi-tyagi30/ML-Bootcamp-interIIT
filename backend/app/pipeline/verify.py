@@ -286,6 +286,11 @@ def build_meta(ctx: "JobContext") -> Meta:
     diar = ctx.read(ctx.output_name(Stage.DIARIZING)) or {}
     probe = ctx.read(ctx.output_name(Stage.NORMALIZING)) or {}
     s = ctx.settings
+    # The cloud model (and whether the local fallback had to step in) is what the record should name.
+    llm = getattr(ctx, "_llm", None)
+    from app.llm.client import GeminiClient
+
+    cloud_name = llm.name if isinstance(llm, GeminiClient) else None
     return Meta(
         job_id=ctx.job_id, title=ctx.title, source_file=ctx.upload.get("source_file", ""),
         duration_s=float(probe.get("duration_s") or 0), language=whisper.get("language", "en"),
@@ -297,8 +302,8 @@ def build_meta(ctx: "JobContext") -> Meta:
                 + ("; low-confidence words marked disputed instead" if recheck.get("fallback") else "")
             ),
             "diarization": diar.get("model") or f"skipped: {diar.get('reason', 'off')}",
-            "lm1": s.LM1_MODEL,
-            "lm2": s.LM2_MODEL,
+            "lm1": cloud_name or s.LM1_MODEL,
+            "lm2": cloud_name or s.LM2_MODEL,
         },
         warnings=list(whisper.get("warnings", [])),
         generated_at=datetime.now(timezone.utc),
