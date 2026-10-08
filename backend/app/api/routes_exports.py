@@ -108,6 +108,5 @@ async def job_export(
     if fmt == "json":
         return Response(rec.model_dump_json(indent=2), media_type=media, headers=headers)
     out = d / "exports" / EXPORT_FILES[fmt]
-    if not out.exists():
-        await asyncio.to_thread(render_exports, rec, d / "exports")
+    await asyncio.to_thread(render_exports, rec, d / "exports")
     return FileResponse(out, media_type=media, headers=headers)

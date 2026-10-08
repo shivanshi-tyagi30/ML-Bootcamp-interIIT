@@ -6,41 +6,40 @@ import type { MeetingRecord, PartialRecord, Segment } from "./types";
 
 export function transcriptTxt(segments: Segment[]): string {
   return segments
-    .map((s) => `[${s.id}] ${fmtTime(s.start)}-${fmtTime(s.end)}${s.speaker ? ` (${s.speaker})` : ""}\n${s.text}`)
+    .map((s) => `[${fmtTime(s.start)}-${fmtTime(s.end)}]${s.speaker ? ` ${s.speaker}:` : ""}\n${s.text}`)
     .join("\n\n");
 }
 
-const cite = (ids: string[]) => (ids.length ? ` [${ids.join(", ")}]` : "");
 
 export function recordMarkdown(r: MeetingRecord): string {
   const out: string[] = [];
-  out.push(`# Meeting record: ${r.meta.source_file ?? "recording"}`, "");
-  if (r.meta.duration_s != null) out.push(`- Duration: ${fmtTime(r.meta.duration_s)}`);
-  const m = r.meta.models ?? {};
-  out.push(`- Models: STT ${m.stt ?? "?"}${m.stt_check ? ` (+ ${m.stt_check})` : ""}; LM1 ${m.lm1 ?? "?"}; LM2 ${m.lm2 ?? "?"}`);
-  if (r.meta.generated_at) out.push(`- Generated: ${r.meta.generated_at}`);
+  out.push(`# ${r.meta.title ?? r.meta.source_file ?? "Meeting record"}`, "");
+  if (r.meta.generated_at) out.push(`- **Date:** ${r.meta.generated_at}`);
+  if (r.meta.duration_s != null) out.push(`- **Duration:** ${fmtTime(r.meta.duration_s)}`);
+  if (r.meta.source_file) out.push(`- **Source file:** ${r.meta.source_file}`);
+  if (r.meta.warnings?.length) out.push(`- **Warnings:** ${r.meta.warnings.join(", ")}`);
   out.push("", "## Summary", "");
-  for (const s of r.summary) out.push(`${s.text}${cite(s.evidence_segment_ids)}`, "");
+  for (const s of r.summary) out.push(`${s.text}`, "");
   out.push("## Minutes", "");
   for (const t of r.minutes) {
     out.push(`### ${t.topic}`, "");
-    for (const p of t.points) out.push(`- ${p.text}${cite(p.evidence_segment_ids)}`);
+    for (const p of t.points) out.push(`- ${p.text}`);
     out.push("");
   }
-  out.push("## Decisions", "");
+  out.push("## Key decisions", "");
   if (!r.decisions.length) out.push("No decisions were reached.");
   for (const d of r.decisions)
-    out.push(`- **${d.id}** ${d.decision} (agreement: "${d.agreement_evidence}")${cite(d.evidence_segment_ids)}`);
+    out.push(`- **${d.id}** ${d.decision} (agreement: "${d.agreement_evidence}")`);
   out.push("", "## Action items", "");
   if (!r.action_items.length) out.push("No action items were identified.");
   else {
-    out.push("| ID | Task | Owner | Deadline | Evidence |", "|---|---|---|---|---|");
+    out.push("| # | Task | Owner | Deadline |", "|---|---|---|---|");
     for (const a of r.action_items)
-      out.push(`| ${a.id} | ${a.task} | ${a.owner} | ${a.deadline} | ${a.evidence_segment_ids.join(", ")} |`);
+      out.push(`| ${a.id} | ${a.task} | ${a.owner} | ${a.deadline} |`);
   }
-  out.push("", "## Open proposals (not agreed)", "");
+  out.push("", "## Not agreed (open proposals)", "");
   if (!r.open_proposals.length) out.push("None.");
-  for (const p of r.open_proposals) out.push(`- ${p.proposal}${cite(p.evidence_segment_ids)}`);
+  for (const p of r.open_proposals) out.push(`- ${p.proposal}`);
   out.push("");
   return out.join("\n");
 }
