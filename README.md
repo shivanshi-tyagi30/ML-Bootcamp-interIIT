@@ -9,6 +9,14 @@
   `npm run dev:mock` runs without one.
 - [`docs/api-contract.md`](docs/api-contract.md): what the frontend relies on from the backend.
 
+## Run on Google Colab (free GPU, no install)
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/shivanshi-tyagi30/ML-Bootcamp-interIIT/blob/main/colab/Trace_on_Colab.ipynb)
+
+Open the notebook, choose **Runtime → Change runtime type → T4 GPU**, then **Runtime → Run all**. Setup takes
+about 10-15 minutes; the last cell prints a public link to the full app running on Colab's GPU
+(Whisper large-v3, qwen3:8b, gemma3:12b). Keep the tab open while using it.
+
 ## Quick start
 
 ```bash
