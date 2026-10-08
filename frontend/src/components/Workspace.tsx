@@ -245,7 +245,6 @@ export function Workspace({ api, jobId, record: initialRecord, audioUrl, error, 
     return () => window.removeEventListener("keydown", onKey);
   }, [audio, pins, selectedId, selectPin]);
 
-  const m = record.meta.models ?? {};
   // Slowest steps first, so the tooltip shows where the time went.
   const timings = Object.entries(record.meta.timings ?? {}).sort((a, b) => b[1] - a[1]);
   const totalSec = timings.reduce((t, [, s]) => t + s, 0);
@@ -260,22 +259,6 @@ export function Workspace({ api, jobId, record: initialRecord, audioUrl, error, 
           <div className="truncate text-[15px] font-bold tracking-[-0.01em]">{record.meta.title ?? record.meta.source_file ?? "Recording"}</div>
           <div className="truncate font-mono text-[10.5px] text-ink-3">
             {fmtTime(record.meta.duration_s ?? audio.duration)}
-            {(m.stt || m.lm1 || m.lm2) && (
-              <Tip
-                className="ml-2 cursor-help"
-                content={
-                  <dl className="grid grid-cols-[auto_1fr] gap-x-3">
-                    {m.stt && <><dt className="text-ink-3">Speech</dt><dd>{m.stt}</dd></>}
-                    {m.stt_check && <><dt className="text-ink-3">Second opinion</dt><dd>{m.stt_check}</dd></>}
-                    {m.diarization && <><dt className="text-ink-3">Speakers</dt><dd>{m.diarization}</dd></>}
-                    {m.lm1 && <><dt className="text-ink-3">LM1 refiner</dt><dd>{m.lm1}</dd></>}
-                    {m.lm2 && <><dt className="text-ink-3">LM2 documenter</dt><dd>{m.lm2}</dd></>}
-                  </dl>
-                }
-              >
-                · {[m.stt, m.lm1, m.lm2].filter(Boolean).join(" / ")}
-              </Tip>
-            )}
             {timings.length > 0 && (
               <Tip
                 className="ml-2 cursor-help"

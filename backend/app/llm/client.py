@@ -255,12 +255,12 @@ class GeminiClient:
     """
 
     def __init__(
-        self, api_key: str, model: str = "gemini-2.5-flash", timeout: int = 300,
-        base_url: str = GEMINI_OPENAI_URL, reasoning_effort: str = "low",
+        self, api_key: str, model: str = "gemini-2.0-flash", timeout: int = 300,
+        base_url: str = GEMINI_OPENAI_URL, reasoning_effort: str = "",
     ) -> None:
         """Create a client for one cloud model (used for both LM1 and LM2)."""
         self.api_key = api_key.strip()
-        self.requested = model.strip() or "gemini-2.5-flash"
+        self.requested = model.strip() or "gemini-2.0-flash"
         self.base_url = base_url.rstrip("/")
         # A retired model replaced once is replaced for every later job too (no repeated 404s).
         self.model = RESOLVED_MODELS.get((self.base_url, self.requested), self.requested)
@@ -389,7 +389,7 @@ class GeminiClient:
                 if about_effort and self.reasoning_effort:
                     self.reasoning_effort = ""  # provider without that option
                     continue
-                if not self.schema_in_prompt and ("schema" in text or "response_format" in text):
+                if not self.schema_in_prompt:
                     self.schema_in_prompt = True
                     continue
             if r.status_code in (401, 403):

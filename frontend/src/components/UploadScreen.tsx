@@ -42,7 +42,13 @@ export function UploadScreen({ error, busy, mock, theme, onTheme, api, onStart, 
   const [serverLlm, setServerLlm] = useState<"cloud" | "key_required" | "local">("local");
   useEffect(() => {
     if (mock) return;
-    api.health().then((h) => setServerLlm(h?.llm?.cloud ? "cloud" : h?.llm?.key_required ? "key_required" : "local")).catch(() => {});
+    api.health().then((h) => {
+      const mode = h?.llm?.cloud ? "cloud" : h?.llm?.key_required ? "key_required" : "local";
+      setServerLlm(mode);
+      if (mode === "key_required" && !localStorage.getItem("trace_api_key")) {
+        setShowKeyInput(true);
+      }
+    }).catch(() => {});
   }, [api, mock]);
   const [apiKey, setApiKey] = useState(() => (typeof window !== "undefined" ? localStorage.getItem("trace_api_key") || "" : ""));
   const [showKeyInput, setShowKeyInput] = useState(false);

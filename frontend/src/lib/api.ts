@@ -161,6 +161,17 @@ const httpApi: Api = {
       method: "POST",
       body: form,
     });
+    if (typeof window !== "undefined" && body.job_id) {
+      try {
+        const stored: string[] = JSON.parse(localStorage.getItem("trace_my_jobs") || "[]");
+        if (!stored.includes(body.job_id)) {
+          stored.unshift(body.job_id);
+          localStorage.setItem("trace_my_jobs", JSON.stringify(stored.slice(0, 100)));
+        }
+      } catch {
+        /* storage unavailable */
+      }
+    }
     return { jobId: body.job_id, cached: !!body.cached };
   },
 
