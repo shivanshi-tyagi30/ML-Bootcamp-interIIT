@@ -63,11 +63,23 @@ async function readError(res: Response): Promise<JobError> {
   return makeError("E_INTERNAL", `Server error (${res.status}).`);
 }
 
+export function getDeviceId(): string {
+  if (typeof window === "undefined") return "";
+  let id = localStorage.getItem("trace_device_id");
+  if (!id) {
+    id = "dev_" + Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
+    localStorage.setItem("trace_device_id", id);
+  }
+  return id;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
-    // The cloud API key travels only with uploads (createJob), never with every request.
-    res = await fetch(`${BASE}${path}`, init);
+    const headers = new Headers(init?.headers);
+    const devId = getDeviceId();
+    if (devId) headers.set("x-device-id", devId);
+    res = await fetch(`${BASE}${path}`, { ...init, headers });
   } catch {
     throw new ApiError(makeError("E_NETWORK"));
   }

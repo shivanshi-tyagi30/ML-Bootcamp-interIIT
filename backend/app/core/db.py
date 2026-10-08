@@ -22,16 +22,18 @@ CREATE TABLE IF NOT EXISTS jobs (
   duration_s    REAL,
   n_decisions   INTEGER DEFAULT 0,
   n_tasks       INTEGER DEFAULT 0,
+  device_id     TEXT,
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_sha ON jobs(file_sha256);
+CREATE INDEX IF NOT EXISTS idx_jobs_device ON jobs(device_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at DESC);
 """
 
 COLUMNS = (
     "id", "title", "source_file", "file_sha256", "status", "stage", "error_code", "error_message",
-    "error_detail", "duration_s", "n_decisions", "n_tasks", "created_at", "updated_at",
+    "error_detail", "duration_s", "n_decisions", "n_tasks", "device_id", "created_at", "updated_at",
 )
 UPDATABLE = set(COLUMNS) - {"id", "created_at"}
 
@@ -60,8 +62,11 @@ class JobDB:
         async with aiosqlite.connect(self.path) as conn:
             await conn.executescript(SCHEMA)
             cur = await conn.execute("PRAGMA table_info(jobs)")
-            if "error_detail" not in {r[1] for r in await cur.fetchall()}:  # databases from v1.0
+            cols = {r[1] for r in await cur.fetchall()}
+            if "error_detail" not in cols:  # databases from v1.0
                 await conn.execute("ALTER TABLE jobs ADD COLUMN error_detail TEXT")
+            if "device_id" not in cols:
+                await conn.execute("ALTER TABLE jobs ADD COLUMN device_id TEXT")
             await conn.commit()
 
     async def insert(self, row: dict[str, Any]) -> None:
@@ -99,10 +104,19 @@ class JobDB:
         finally:
             await conn.close()
 
-    async def list(self, limit: int = 50, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
-        """Jobs newest first, and the total count."""
+    async def list(self, limit: int = 50, offset: int = 0, device_id: str | None = None) -> tuple[list[dict[str, Any]], int]:
+        """Jobs newest first, optionally filtered by device_id."""
         conn = await self._conn()
         try:
+            if device_id:
+                cur = await conn.execute(
+                    "SELECT * FROM jobs WHERE device_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?",
+                    (device_id, limit, offset),
+                )
+                rows = [dict(r) for r in await cur.fetchall()]
+                cur = await conn.execute("SELECT COUNT(*) FROM jobs WHERE device_id = ?", (device_id,))
+                total = (await cur.fetchone())[0]
+                return rows, total
             cur = await conn.execute(
                 "SELECT * FROM jobs ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?", (limit, offset)
             )
@@ -113,14 +127,20 @@ class JobDB:
         finally:
             await conn.close()
 
-    async def find_completed_by_sha(self, sha: str) -> dict[str, Any] | None:
-        """Newest completed job for a file hash (dedupe cache)."""
+    async def find_completed_by_sha(self, sha: str, device_id: str | None = None) -> dict[str, Any] | None:
+        """Newest completed job for a file hash, optionally scoped to the device."""
         conn = await self._conn()
         try:
-            cur = await conn.execute(
-                "SELECT * FROM jobs WHERE file_sha256 = ? AND status = 'completed' ORDER BY created_at DESC LIMIT 1",
-                (sha,),
-            )
+            if device_id:
+                cur = await conn.execute(
+                    "SELECT * FROM jobs WHERE file_sha256 = ? AND device_id = ? AND status = 'completed' ORDER BY created_at DESC LIMIT 1",
+                    (sha, device_id),
+                )
+            else:
+                cur = await conn.execute(
+                    "SELECT * FROM jobs WHERE file_sha256 = ? AND status = 'completed' ORDER BY created_at DESC LIMIT 1",
+                    (sha,),
+                )
             row = await cur.fetchone()
             return dict(row) if row else None
         finally:
