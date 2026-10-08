@@ -62,7 +62,6 @@ class Settings(BaseSettings):
     CLOUD_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta/openai"
     CLOUD_TIMEOUT_SEC: int = 300
     CLOUD_REASONING_EFFORT: str = "low"  # thinking models: "low" keeps answers fast; "" = provider default
-    CLOUD_FALLBACK_LOCAL: bool = True  # use the local model only when the cloud cannot be reached at all
     LM1_MODEL: str = "qwen3:14b"
     LM2_MODEL: str = "gemma3:27b"
     LLM_TIMEOUT_SEC: int = 600

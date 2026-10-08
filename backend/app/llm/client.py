@@ -251,12 +251,12 @@ class GeminiClient:
       plain JSON mode with the structure written into the prompt instead.
     - Leaves room for "thinking" models: the output budget is never below CLOUD_MIN_OUTPUT_TOKENS.
     - Clear errors for a bad key, rate limits and timeouts; never a silent switch to a slower model.
-    - Falls back to the local model only when the cloud cannot be reached at all (no internet), and says so.
+    - With a key the cloud model is the only model: no internet is a clear error, never the slow local model.
     """
 
     def __init__(
         self, api_key: str, model: str = "gemini-2.5-flash", timeout: int = 300,
-        fallback: JSONLLM | None = None, base_url: str = GEMINI_OPENAI_URL, reasoning_effort: str = "low",
+        base_url: str = GEMINI_OPENAI_URL, reasoning_effort: str = "low",
     ) -> None:
         """Create a client for one cloud model (used for both LM1 and LM2)."""
         self.api_key = api_key.strip()
@@ -265,16 +265,15 @@ class GeminiClient:
         # A retired model replaced once is replaced for every later job too (no repeated 404s).
         self.model = RESOLVED_MODELS.get((self.base_url, self.requested), self.requested)
         self.timeout = timeout
-        self.fallback = fallback
         self.reasoning_effort = reasoning_effort.strip()
         self.schema_in_prompt = False  # set after a provider rejects json_schema
         self._available: list[str] = []
-        self.used_fallback = False
+        self._tried: set[str] = set()
 
     @property
     def name(self) -> str:
         """Model label for the record."""
-        return f"{self.model} (cloud)" + (" + local fallback" if self.used_fallback else "")
+        return f"{self.model} (cloud)"
 
     async def preload(self, model: str) -> bool:
         """Nothing to load for a cloud model."""
@@ -301,14 +300,14 @@ class GeminiClient:
         return body
 
     async def _post(self, body: dict[str, Any]) -> httpx.Response:
-        """POST with one short wait-and-retry on rate limits and server errors."""
+        """POST, waiting and retrying a few times on rate limits and server errors ("high demand")."""
         url = f"{self.base_url}/chat/completions"
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
-        for attempt in range(3):
+        for attempt in range(CLOUD_BUSY_RETRIES + 1):
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 r = await client.post(url, headers=headers, json=body)
-            if r.status_code in (429, 500, 502, 503, 504) and attempt < 2:
-                wait = min(float(r.headers.get("retry-after") or 0) or (5.0 * (attempt + 1)), 30.0)
+            if r.status_code in BUSY and attempt < CLOUD_BUSY_RETRIES:
+                wait = min(float(r.headers.get("retry-after") or 0) or CLOUD_BUSY_WAIT * 2 ** attempt, 30.0)
                 log.warning("cloud LLM HTTP %d; retrying in %.0f s", r.status_code, wait)
                 await asyncio.sleep(wait)
                 continue
@@ -327,9 +326,18 @@ class GeminiClient:
         self._available = ids
         return pick_chat_model(ids)
 
+    async def _busy_backup(self) -> str | None:
+        """Another chat model for this key, for when the current one stays overloaded (each has its own capacity
+        and free-tier quota). Tried models are not picked again within this job."""
+        self._tried.add(self.model)
+        if not self._available:
+            await self._discover_model()
+        return pick_chat_model([m for m in self._available if m not in self._tried])
+
     async def _call(self, messages: list[dict[str, str]], schema: type[BaseModel], max_tokens: int) -> str:
-        """One completed call; adapts once to providers that reject json_schema or reasoning_effort."""
-        for _ in range(3):
+        """One completed call; adapts to providers that reject json_schema or reasoning_effort, to retired
+        models, and to a model that stays overloaded (switches to another cloud model, never to the local one)."""
+        for _ in range(8):
             body = self._body(messages if not self.schema_in_prompt else _with_schema(messages, schema),
                               schema, max_tokens)
             try:
@@ -346,8 +354,17 @@ class GeminiClient:
                     continue
             if r.status_code in (401, 403):
                 raise LLMUnavailable("The cloud model rejected the API key. Check the key and try again.")
+            if r.status_code in BUSY:
+                backup = await self._busy_backup()
+                if backup:
+                    log.warning("cloud model %s busy (HTTP %d); switching to %s", self.model, r.status_code, backup)
+                    self.model = backup
+                    continue
             if r.status_code == 429:
                 raise LLMUnavailable("The cloud model's free-tier rate limit was reached. Wait a minute and retry.")
+            if r.status_code in BUSY:
+                raise LLMUnavailable("The cloud model is overloaded right now (Google says this is usually "
+                                     "temporary). Wait a minute and press Retry: finished steps are kept.")
             if r.status_code == 404:
                 # Model retired or renamed: ask the provider which models this key can use and pick one.
                 replacement = await self._discover_model()
@@ -378,16 +395,9 @@ class GeminiClient:
             t0 = time.perf_counter()
             try:
                 text = await self._call(messages, schema, max_tokens)
-            except httpx.TransportError as e:  # no connection at all: the only case for the local model
-                if self.fallback is None:
-                    raise LLMUnavailable(f"Can't reach the cloud model ({e!r}). Check the internet connection.") from e
-                log.warning("cloud LLM unreachable (%r); using the local model for %s", e, schema.__name__,
-                            extra={"job_id": job_id})
-                self.used_fallback = True
-                if on_retry:
-                    await on_retry("cloud model unreachable, using the local model (slower)")
-                return await self.fallback.json_call(model, system, user, schema, max_retries, max_tokens, job_id,
-                                                     on_retry)
+            except httpx.TransportError as e:  # a key means cloud only: never a silent switch to the local model
+                raise LLMUnavailable("Can't reach the cloud model. Check the internet connection and press Retry: "
+                                     "finished steps are kept.") from e
             log.info("cloud llm %s attempt=%d schema=%s latency=%.1fs", self.model, attempt, schema.__name__,
                      time.perf_counter() - t0, extra={"job_id": job_id})
             try:
@@ -404,6 +414,10 @@ class GeminiClient:
                 ]
         raise InvalidModelOutput(f"{self.model} returned invalid JSON {max_retries + 1} times: {last_error}")
 
+
+BUSY = (429, 500, 502, 503, 504)
+CLOUD_BUSY_RETRIES = 3  # waits of 4, 8 and 16 s before trying another model
+CLOUD_BUSY_WAIT = 4.0
 
 NOT_CHAT = ("embed", "image", "tts", "audio", "live", "vision", "aqa", "veo", "imagen", "learnlm", "robotics",
             "computer-use", "native", "transcribe", "lyria", "nano", "gemma")

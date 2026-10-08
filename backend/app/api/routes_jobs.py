@@ -35,6 +35,13 @@ def default_title(filename: str, title: str | None) -> str:
     return f"{filename} – {d.day} {d:%b %Y}"[:100]
 
 
+def made_with_cloud(jobs_dir: Path, job_id: str) -> bool:
+    """Whether a finished job's record was written by the cloud model (so a re-upload reuses it only when
+    it would be made the same way: a key -> cloud, no key -> local)."""
+    rec = read_json(job_dir(jobs_dir, job_id) / STAGE_OUTPUT[Stage.VERIFYING]) or {}
+    return "(cloud)" in str((rec.get("meta") or {}).get("models", {}).get("lm2", ""))
+
+
 @router.post("/jobs", status_code=202, response_model=CreateJobResponse)
 async def create_job(
     request: Request,
@@ -62,16 +69,17 @@ async def create_job(
             shutil.rmtree(d, ignore_errors=True)
             return JSONResponse(status_code=e.http_status, content={"code": e.code, "message": e.user_message})
 
+        effective_key = (api_key or request.headers.get("x-gemini-key") or request.headers.get("x-api-key")
+                         or getattr(s, "GEMINI_API_KEY", "") or "").strip()
         if not force:
             cached = await state.db.find_completed_by_sha(info["sha256"])
-            if cached:
+            if cached and made_with_cloud(s.jobs_dir, cached["id"]) == bool(effective_key):
                 shutil.rmtree(d, ignore_errors=True)
                 return JSONResponse(status_code=200, content={"job_id": cached["id"], "status": "completed",
                                                               "cached": True})
 
         job_title = default_title(filename, title)
         terms = [t.strip() for t in (glossary or "").split(",") if t.strip()][:100]
-        effective_key = (api_key or request.headers.get("x-gemini-key") or request.headers.get("x-api-key") or getattr(s, "GEMINI_API_KEY", "") or "").strip()
         write_json(d / STAGE_OUTPUT[Stage.VALIDATING], {
             **info, "job_id": job_id, "title": job_title, "source_file": filename, "glossary": terms,
             "uploaded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),

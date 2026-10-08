@@ -113,24 +113,24 @@ class JobContext:
 
     @property
     def llm(self) -> JSONLLM:
-        """LLM client (created on first use): uses Gemini if API key is provided, else local Ollama."""
+        """LLM client (created on first use): the cloud model when an API key was given, else local Ollama.
+
+        Never both: with a key every LM call goes to the cloud, and a cloud failure is shown, not hidden behind
+        the much slower local model.
+        """
         if self._llm is None:
             s = self.settings
-            ollama_client = LLMClient(
-                s.LLM_BASE_URL, s.LLM_BACKEND, s.LLM_TIMEOUT_SEC, {s.LM2_MODEL: s.LM2_BASE_URL},
-                max_context=s.LLM_MAX_CONTEXT, keep_alive=s.OLLAMA_KEEP_ALIVE,
-            )
             api_key = (JOB_API_KEYS.get(self.job_id) or s.GEMINI_API_KEY or "").strip()
             if api_key:
                 from app.llm.client import GeminiClient
 
-                self._llm = GeminiClient(
-                    api_key=api_key, model=s.GEMINI_MODEL, timeout=s.CLOUD_TIMEOUT_SEC,
-                    fallback=ollama_client if s.CLOUD_FALLBACK_LOCAL else None, base_url=s.CLOUD_BASE_URL,
-                    reasoning_effort=s.CLOUD_REASONING_EFFORT,
-                )
+                self._llm = GeminiClient(api_key=api_key, model=s.GEMINI_MODEL, timeout=s.CLOUD_TIMEOUT_SEC,
+                                         base_url=s.CLOUD_BASE_URL, reasoning_effort=s.CLOUD_REASONING_EFFORT)
             else:
-                self._llm = ollama_client
+                self._llm = LLMClient(
+                    s.LLM_BASE_URL, s.LLM_BACKEND, s.LLM_TIMEOUT_SEC, {s.LM2_MODEL: s.LM2_BASE_URL},
+                    max_context=s.LLM_MAX_CONTEXT, keep_alive=s.OLLAMA_KEEP_ALIVE,
+                )
         return self._llm
 
     @property

@@ -111,10 +111,12 @@ paste it in the app's API key box (it is sent only with uploads, kept in server 
 
 - The request asks for the exact record structure (`json_schema`); providers that reject it get JSON mode with
   the structure in the prompt. The guard, verifier and speaker-name checks still check every edit and item.
-- Bad key, rate limit or timeout give a clear error. The local Ollama model is used only when the cloud cannot be
-  reached at all, and the record then says `(cloud) + local fallback`.
+- With a key, the cloud model is the only language model: the local Ollama model runs only for uploads without a
+  key. A busy model (HTTP 503 "high demand") is retried, then another cloud model the key can use takes over. A bad
+  key, no internet or every model busy give a clear error, and Retry continues from the failed step.
+- Re-uploading a file reuses the earlier result only if it was made the same way (cloud or local).
 - `GEMINI_MODEL`, `CLOUD_BASE_URL` (e.g. `https://api.openai.com/v1` for GPT), `CLOUD_REASONING_EFFORT`,
-  `CLOUD_TIMEOUT_SEC`, `CLOUD_FALLBACK_LOCAL` configure it. Free tiers have rate limits, and transcript text is
+  `CLOUD_TIMEOUT_SEC` configure it. Free tiers have rate limits, and transcript text is
   sent to the provider.
 
 ## Deploying (no user ever waits for a model)
