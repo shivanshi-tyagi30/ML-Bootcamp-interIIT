@@ -1,7 +1,6 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, type Api } from "../lib/api";
 import type { TranscriptMode } from "../lib/annotate";
-import { fmtTime } from "../lib/format";
 import type { JobError, PartialRecord, Segment } from "../lib/types";
 import { useAudio } from "../lib/useAudio";
 import { DownloadMenu } from "./DownloadMenu";
@@ -9,7 +8,7 @@ import { PlayerBar, type Pin } from "./PlayerBar";
 import { RecordPane, type RecordTab } from "./RecordPane";
 import { Legend, Scorecard } from "./Scorecard";
 import { TranscriptPane } from "./TranscriptPane";
-import { Brand, Button, Icon, Tip } from "./ui";
+import { Brand, Button, Icon } from "./ui";
 
 interface Props {
   api: Api;
@@ -215,11 +214,6 @@ export function Workspace({ api, jobId, record: initialRecord, audioUrl, error, 
     return () => window.removeEventListener("keydown", onKey);
   }, [audio, pins, selectedId, selectPin]);
 
-  const m = record.meta.models ?? {};
-  // Slowest steps first, so the tooltip shows where the time went.
-  const timings = Object.entries(record.meta.timings ?? {}).sort((a, b) => b[1] - a[1]);
-  const totalSec = timings.reduce((t, [, s]) => t + s, 0);
-
   return (
     <div className="flex h-full flex-col">
       <audio ref={audio.ref} src={audioUrl ?? undefined} preload="metadata" />
@@ -228,42 +222,6 @@ export function Workspace({ api, jobId, record: initialRecord, audioUrl, error, 
         <Brand compact />
         <div className="min-w-0 flex-1 border-l border-line pl-5">
           <div className="truncate text-[15px] font-bold tracking-[-0.01em]">{record.meta.title ?? record.meta.source_file ?? "Recording"}</div>
-          <div className="truncate font-mono text-[10.5px] text-ink-3">
-            {fmtTime(record.meta.duration_s ?? audio.duration)}
-            {(m.stt || m.lm1 || m.lm2) && (
-              <Tip
-                className="ml-2 cursor-help"
-                content={
-                  <dl className="grid grid-cols-[auto_1fr] gap-x-3">
-                    {m.stt && <><dt className="text-ink-3">Speech</dt><dd>{m.stt}</dd></>}
-                    {m.stt_check && <><dt className="text-ink-3">Second opinion</dt><dd>{m.stt_check}</dd></>}
-                    {m.diarization && <><dt className="text-ink-3">Speakers</dt><dd>{m.diarization}</dd></>}
-                    {m.lm1 && <><dt className="text-ink-3">LM1 refiner</dt><dd>{m.lm1}</dd></>}
-                    {m.lm2 && <><dt className="text-ink-3">LM2 documenter</dt><dd>{m.lm2}</dd></>}
-                  </dl>
-                }
-              >
-                · {[m.stt, m.lm1, m.lm2].filter(Boolean).join(" / ")}
-              </Tip>
-            )}
-            {timings.length > 0 && (
-              <Tip
-                className="ml-2 cursor-help"
-                content={
-                  <dl className="grid grid-cols-[auto_auto] gap-x-3">
-                    {timings.map(([stage, s]) => (
-                      <Fragment key={stage}>
-                        <dt className="text-ink-3">{stage.replace("_", " ")}</dt>
-                        <dd className="text-right tabular-nums">{s.toFixed(1)} s</dd>
-                      </Fragment>
-                    ))}
-                  </dl>
-                }
-              >
-                · processed in {fmtTime(totalSec)}
-              </Tip>
-            )}
-          </div>
         </div>
         <DownloadMenu api={api} jobId={jobId} record={record} />
         <Button variant="ghost" onClick={onTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}>

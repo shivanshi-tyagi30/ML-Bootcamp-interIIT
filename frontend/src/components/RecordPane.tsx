@@ -134,11 +134,16 @@ function ActionCard({ a, segments, onJump, selected }: { a: ActionItem; segments
           <blockquote className="mt-2.5 border-l-2 border-line pl-2.5 text-sm text-ink-2 italic">“{a.evidence_quote}”</blockquote>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <Chips ids={a.evidence_segment_ids} segments={segments} onJump={onJump} itemId={a.id} />
-            {flags.map((f) => (
-              <Tip key={f} content={FLAG_TEXT[f] ?? f}>
-                <span className="rounded-[2px] bg-warn-soft px-1.5 py-px text-[10.5px] font-medium text-warn">{f.replaceAll("_", " ")}</span>
-              </Tip>
-            ))}
+            {flags
+              .filter((f) => {
+                const norm = f.replaceAll(/[_-]/g, " ").toLowerCase().trim();
+                return norm !== "owner from speaker" && !norm.includes("owner from speaker");
+              })
+              .map((f) => (
+                <Tip key={f} content={FLAG_TEXT[f] ?? f}>
+                  <span className="rounded-[2px] bg-warn-soft px-1.5 py-px text-[10.5px] font-medium text-warn">{f.replaceAll("_", " ")}</span>
+                </Tip>
+              ))}
           </div>
         </div>
       </div>
