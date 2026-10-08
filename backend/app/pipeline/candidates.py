@@ -20,11 +20,21 @@ TASK_CUE = re.compile(
     r"saturday|sunday|next|the end|end of|eod|eow|\d))\b",
     re.I,
 )
+# How people really settle things in conversation: "you're right", "Whisper X it is.", "fair enough",
+# "okay, fine", "that works", "go for it". ("what it is" / "that it is" are not agreement.)
+CONVERSATIONAL_AGREE = (
+    r"you(?:'re| are) (?:right|correct)|\b(?!(?:what|that|as|here|there|how|where|who|which|this)\b)[A-Za-z0-9]+ "
+    r"it is[.!]|fair enough|that works|works for me|go for it|deal[.!]|you convinced me|i'm convinced|"
+    r"(?:okay|ok|alright|fine),? (?:fine|then|let's|you(?:'re| are) right)|fine,? let's|sounds good|"
+    r"let's go with|we'll go with|that's settled|that settles it"
+)
+
 DECISION_CUE = re.compile(
     r"\b(?:agreed|we agree|decided|decision|final call|finali[sz]e[d]?|let's go with|we'll go with|"
     r"we will go with|go ahead|approved|confirmed|settled|that's final|done deal|let's do (?:it|that)|"
     r"let's postpone|we'll postpone|we will postpone|postponed|we won't|we will not|we're not going to|"
-    r"we are not going to|for now we'll|for now we will|we'll use|we will use|we'll keep|we will keep)\b",
+    r"we are not going to|for now we'll|for now we will|we'll use|we will use|we'll keep|we will keep)\b|"
+    + CONVERSATIONAL_AGREE,
     re.I,
 )
 PROPOSAL_CUE = re.compile(
@@ -42,16 +52,24 @@ REQUEST = re.compile(r"\b(?:can you|could you|would you|will you|please)\b", re.
 # A short reply from another person that accepts what was just proposed.
 REPLY_AGREE = re.compile(
     r"^\W*(?:agreed|yes|yeah|yep|sure|sounds good|fine by me|makes sense|works for me|okay,? let's|"
-    r"ok,? let's|let's do (?:it|that)|done|absolutely|definitely|perfect|great,? let's)\b",
+    r"ok,? let's|let's do (?:it|that)|done|absolutely|definitely|perfect|great,? let's|"
+    r"you(?:'re| are) right|fair enough|that works|go for it|good idea|great idea|i agree|me too|same here)\b",
     re.I,
 )
 REPLY_MAX_WORDS = 12
+# A bare "Ok." / "Fine." / "Right, sure." is acceptance only when it is (almost) the whole reply:
+# "Okay, final call: we ship v2..." starts with "Okay" but answers nothing.
+BARE_AGREE = re.compile(r"^\W*(?:ok|okay|fine|alright|all right|right|true|correct|exactly|deal|yes|yeah|sure)"
+                        r"(?:\W+(?:ok|okay|fine|sure|then|yes|yeah|right))?\W*$", re.I)
 
 
 def is_agreeing_reply(prev: Segment, reply: Segment) -> bool:
     """`reply` is a short acceptance said by a different speaker than `prev`."""
     different = not (prev.speaker and reply.speaker and prev.speaker == reply.speaker)
-    return different and len(reply.text.split()) <= REPLY_MAX_WORDS and bool(REPLY_AGREE.search(reply.text))
+    if not different:
+        return False
+    return bool(BARE_AGREE.match(reply.text)) or (
+        len(reply.text.split()) <= REPLY_MAX_WORDS and bool(REPLY_AGREE.search(reply.text)))
 
 
 def find_candidates(segments: list[Segment]) -> list[dict[str, Any]]:

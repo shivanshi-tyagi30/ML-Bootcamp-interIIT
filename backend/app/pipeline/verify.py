@@ -17,9 +17,10 @@ from app.models.record import (
     UNSPECIFIED, ActionItem, CitedSentence, Decision, Fidelity, MeetingRecord, Meta, MinutesTopic, Pointer,
     Proposal, Refinement, Segment,
 )
-from app.pipeline.candidates import FIRST_PERSON_COMMIT, PROPOSAL_CUE, REQUEST, TASK_CUE, is_agreeing_reply
+from app.pipeline.candidates import CONVERSATIONAL_AGREE, FIRST_PERSON_COMMIT, PROPOSAL_CUE, REQUEST, TASK_CUE, is_agreeing_reply
 from app.pipeline.fidelity import compute_fidelity
 from app.pipeline.guard import _word_spans
+from app.pipeline.speaker_names import rename_in_text, verify_llm_names
 
 if TYPE_CHECKING:
     from app.pipeline.runner import JobContext
@@ -27,7 +28,7 @@ if TYPE_CHECKING:
 AGREEMENT_CUE = re.compile(
     r"\b(?:agree|agreed|decided|decision|final|finali[sz]e[d]?|let's go|go with|we will|we'll|approved|confirmed|"
     r"settled|done deal|sounds good|yes,? let's|fine by me|makes sense|works for me|go ahead|"
-    r"let's do (?:it|that)|postpone[d]?|we won't|we will not)\b", re.I,
+    r"let's do (?:it|that)|postpone[d]?|we won't|we will not)\b|" + CONVERSATIONAL_AGREE, re.I,
 )
 INTRO = r"\b(?:this is|i am|i'm|my name is|it's)\s+"
 DEADLINE_ADJACENCY = 2
@@ -207,13 +208,16 @@ def verify(
         if not ids:
             stats.items_dropped += 1
             continue
+        accepted_reply = False
         if not (AGREEMENT_CUE.search(d.agreement_evidence) and _quote_matches(d.agreement_evidence, ids, seg, thr)):
             # The model's quote was paraphrased or incomplete: use the real agreement line if there is one.
             repaired = find_agreement(ids, refined, order)
             if repaired:
                 d = d.model_copy(update={"agreement_evidence": repaired[0]})
                 ids = sorted(set(ids) | set(repaired[1]), key=order.get)
-        if AGREEMENT_CUE.search(d.agreement_evidence) and _quote_matches(d.agreement_evidence, ids, seg, thr):
+                accepted_reply = bool(repaired[1])  # a short "Ok." / "Agreed." from someone else
+        if ((AGREEMENT_CUE.search(d.agreement_evidence) or accepted_reply)
+                and _quote_matches(d.agreement_evidence, ids, seg, thr)):
             decisions.append(Decision(id="D0", decision=d.decision, agreement_evidence=d.agreement_evidence,
                                       evidence_segment_ids=ids))
         else:
@@ -301,6 +305,27 @@ def build_meta(ctx: "JobContext") -> Meta:
     )
 
 
+def apply_model_names(lm2: LM2Output, raw: list[Segment], refined: list[Segment]):
+    """Verified LM2 speaker names applied to both transcripts and to LM2's own text ("Speaker 2 reported...")."""
+    taken = {s.speaker for s in refined if s.speaker and not re.fullmatch(r"Speaker \d+", s.speaker)}
+    named = verify_llm_names(lm2.speakers, refined, taken)
+    if not named:
+        return lm2, raw, refined, {}
+    relabel = lambda segs: [s.model_copy(update={"speaker": named[s.speaker]["name"]})  # noqa: E731
+                            if s.speaker in named else s for s in segs]
+    fix = lambda t: rename_in_text(t, named)  # noqa: E731
+    lm2 = lm2.model_copy(update={
+        "summary": [x.model_copy(update={"text": fix(x.text)}) for x in lm2.summary],
+        "minutes": [t.model_copy(update={"topic": fix(t.topic),
+                                         "points": [p.model_copy(update={"text": fix(p.text)}) for p in t.points]})
+                    for t in lm2.minutes],
+        "decisions": [d.model_copy(update={"decision": fix(d.decision)}) for d in lm2.decisions],
+        "open_proposals": [p.model_copy(update={"proposal": fix(p.proposal)}) for p in lm2.open_proposals],
+        "action_items": [a.model_copy(update={"task": fix(a.task)}) for a in lm2.action_items],
+    })
+    return lm2, relabel(raw), relabel(refined), named
+
+
 async def verify_record(ctx: "JobContext") -> None:
     """Stage function: write record.json and update the job row."""
     raw = [Segment(**s) for s in ctx.read(ctx.output_name(Stage.RAW_SAVED))]
@@ -308,6 +333,11 @@ async def verify_record(ctx: "JobContext") -> None:
     refinement = Refinement(**ctx.read(ctx.output_name(Stage.GUARDING)))
     lm2 = LM2Output(**ctx.read(ctx.output_name(Stage.DOCUMENTING)))
     diar = ctx.read(ctx.output_name(Stage.DIARIZING)) or {}
+    if ctx.settings.SPEAKER_NAMES_FROM_TRANSCRIPT:
+        lm2, raw, refined, named = apply_model_names(lm2, raw, refined)
+        if named:
+            ctx.log.info("speaker names from LM2 (verified): %s", {k: v["name"] for k, v in named.items()})
+            ctx.write("speaker_names.json", {**(ctx.read("speaker_names.json") or {}), **named})
     rec = verify(lm2, raw, refined, refinement, build_meta(ctx), ctx.settings, diarization_on=not diar.get("skipped", True))
     ctx.write(ctx.output_name(Stage.VERIFYING), rec)
     await ctx.db.update(ctx.job_id, n_decisions=len(rec.decisions), n_tasks=len(rec.action_items),

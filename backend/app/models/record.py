@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 UNSPECIFIED = "Unspecified"
 
-EditCategory = Literal["acronym", "technical_term", "proper_noun", "product", "homophone"]
+EditCategory = Literal["acronym", "technical_term", "proper_noun", "product", "homophone", "symbol"]
 RejectReason = Literal[
     "not_found", "number_changed", "negation_changed", "modal_changed", "over_rewrite",
     "not_sound_alike", "low_confidence", "name_changed", "touches_disputed_frozen",

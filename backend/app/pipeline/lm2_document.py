@@ -85,7 +85,9 @@ def merge_outputs(parts: list[LM2Record]) -> LM2Output:
                 topics[key].points.extend(x for x in t.points if x.text not in have)
             else:
                 topics[key] = t.model_copy(deep=True)
+    speakers = list({(sp.label, sp.name.lower()): sp for p in parts for sp in p.speakers}.values())
     return LM2Output(
+        speakers=speakers,
         summary=[s for p in parts for s in p.summary],
         minutes=list(topics.values()),
         decisions=_dedupe([d for p in parts for d in p.decisions], lambda x: x.decision, lambda x: x.evidence_segment_ids),
