@@ -51,6 +51,30 @@ Audio Input ──► Groq Cloud (whisper-large-v3) ──► 10-min audio trans
 
 ---
 
+## Project Sturcture
+
+├── backend/
+│   ├── app/
+│   │   ├── api/             # REST routes for jobs, health, and schemas
+│   │   ├── core/            # Database, error types, stages, text utilities
+│   │   ├── data/            # Pre-seeded tech terms and places dictionaries
+│   │   ├── llm/             # Gemini client with retry and backoff logic
+│   │   ├── models/          # Pydantic schemas for records and LLM inputs
+│   │   ├── pipeline/        # 13-stage pipeline implementations
+│   │   ├── config.py        # Environment settings and threshold constants
+│   │   └── main.py          # FastAPI application entrypoint
+│   ├── Dockerfile           # Production container build
+│   └── requirements.txt     # Python dependencies
+├── frontend/
+│   ├── src/
+│   │   ├── components/      # Workspace, PlayerBar, TranscriptPane, RecordPane
+│   │   ├── hooks/           # useAudio synchronization hook
+│   │   └── lib/             # API client, diff annotations, speaker rename
+│   └── package.json         # React 19 frontend dependencies
+└── render.yaml              # Render Blueprint deployment configuration
+
+---
+
 ## Key Thresholds
 
 | Parameter | Setting | Purpose |
