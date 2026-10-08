@@ -26,13 +26,18 @@ NAME = r"([A-Z][a-z]{1,20}(?:\s[A-Z][a-z]{1,20})?)"
 # "this is X" needs the name right after a greeting or at the start, so "this is Python" etc. is less likely.
 SELF_INTRO = [
     re.compile(r"\b(?:i am|i'm|im|my name is|my name's|myself)\s+" + NAME + r"\b(?!')"),
-    re.compile(r"(?:^|[.,!?]\s*|\b(?:hi|hello|hey|yeah|yes|okay|ok)[,!]?\s+)this is\s+" + NAME),
+    re.compile(r"(?:^|[.,!?]\s*|\b(?:hi|hello|hey|yeah|yes|okay|ok)[,!]?\s+)this is\s+" + NAME + r"\b(?!')"),
     re.compile(r"(?:^|[.,!?]\s*)" + NAME + r"\s+(?:here|speaking)\b"),
+    re.compile(r"\b(?:it's|its)\s+" + NAME + r"\s+(?:here|speaking)\b"),
 ]
 ADDRESS = [
-    re.compile(r"\b(?:hi|hello|hey|thanks|thank you|okay|ok|over to you|welcome|morning|good morning),?\s+"
+    re.compile(r"\b(?:hi|hello|hey|thanks|thank you|welcome|morning|good morning|bye|goodbye),?\s+"
                + NAME + r"\b(?!')"),
-    re.compile(r"(?:^|[.!?]\s+)" + NAME + r",\s+(?:can|could|will|would|do|did|are|what|how|please|you)\b"),
+    re.compile(r"(?:^|[.!?]\s+)" + NAME + r",?\s+(?:can|could|will|would|do|did|are|what|how|please|you|go ahead|take over|take it)\b"),
+    re.compile(r"\b(?:over to|pass to|hand over to|handing over to|let's hear from|asking|invite|welcome)\s+"
+               + NAME + r"\b(?!')"),
+    re.compile(r"\b(?:what do you think|your thoughts|what's your take|are you there|you agree|right)[, ]+"
+               + NAME + r"\b(?!')"),
 ]
 
 # Capitalized words that follow "I am" / "Hi" but are not names.

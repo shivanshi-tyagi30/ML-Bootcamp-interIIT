@@ -3,16 +3,18 @@ The transcript may contain recognition errors in technical terms.
 
 TASK
 1. Identify the meeting's domain in a few words.
-2. List the technical terms, acronyms, product names, project names, and names of places, institutions and
-   organisations (cities, states, colleges such as IIT Guwahati, companies) that are actually discussed.
-   For each, give the correct standard written form and the ways it appears misheard or misspelled in the
-   transcript (e.g. term "Guwahati", heard_as ["Guhati"]).
+2. List technical terms, domain acronyms, product/project names, organizations,
+   institutions, and proper nouns that are discussed in the conversation.
+   For each, identify the intended standard written form and how speech-to-text
+   phonetically misheard or misspelled it in the transcript.
 
 RULES
-- Only include terms supported by the transcript. Do not add terms that are not discussed.
-- Pay special attention to regional place names, Indian cities and institutions (e.g. Thiruvananthapuram, Kozhikode, Bengaluru, Goa, Pune, IIT Guwahati), technical tools and Python libraries (e.g. NumPy, SciPy, Scikit-learn, TensorFlow, PyTorch, Jupyter), and domain acronyms that speech recognition mishears into garbled English words (e.g. term "Thiruvananthapuram", heard_as ["Thiravundapuram"]; term "Kozhikode", heard_as ["Kozy Ford"]; term "Goa", heard_as ["Goati"]).
-- Do NOT include people's names, numbers or dates.
-- "heard_as" must contain exact substrings from the transcript (may be empty if always correct).
+- Only include terms grounded in the transcript. Do not hallucinate terms not spoken.
+- Recognize phonetic speech-to-text substitutions: STT frequently replaces unfamiliar words,
+  proper nouns, technical jargon, or regional pronunciations with phonetically similar common
+  English words or corrupted spellings. Use context to recover the intended standard term.
+- Do NOT include individual people's names, numbers, or dates.
+- "heard_as" must contain the exact substring(s) as they appear in the transcript.
 - Maximum 60 terms.
 
 OUTPUT (JSON only)

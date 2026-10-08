@@ -25,9 +25,9 @@ log = logging.getLogger(__name__)
 
 DEFAULT_ECAPA_MODEL = "speechbrain/spkrec-ecapa-voxceleb"
 DEFAULT_DISTANCE_THRESHOLD = 0.48  # cosine distance; same voice is usually < 0.42 on 2-3 s clips
-BURST_GAP_SEC = 0.42  # a pause this long may be a turn change
+BURST_GAP_SEC = 0.28  # a pause this long indicates a potential turn change
 MAX_BURST_SEC = 8.0  # long monologues are cut so a quick reply without a pause can still be seen
-MIN_CLUSTER_SEC = 0.6  # shorter bursts join nearest cluster afterwards
+MIN_CLUSTER_SEC = 0.4  # bursts of at least this length can form speaker cluster anchors
 MIN_SPEAKER_SEC = 3.0  # clusters with less speech than this are merged into the nearest one
 MIN_EMBED_SEC = 0.4  # ECAPA needs a little audio; shorter clips are repeated to this length
 
@@ -37,14 +37,19 @@ def make_bursts(words: list[dict[str, Any]], gap: float = BURST_GAP_SEC,
     """(start, end) of speech bursts from Whisper words."""
     out: list[tuple[float, float]] = []
     start = end = None
+    prev_seg = None
     for w in words:
+        seg = w.get("seg")
+        seg_split = (prev_seg is not None and seg is not None and seg != prev_seg
+                     and end is not None and (w["start"] - end >= 0.18))
         if start is None:
             start, end = w["start"], w["end"]
-        elif w["start"] - end >= gap or w["end"] - start > max_sec:
+        elif w["start"] - end >= gap or w["end"] - start > max_sec or seg_split:
             out.append((float(start), float(end)))
             start, end = w["start"], w["end"]
         else:
             end = max(end, w["end"])
+        prev_seg = seg
     if start is not None:
         out.append((float(start), float(end)))
     return out
