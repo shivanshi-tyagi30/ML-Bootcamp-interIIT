@@ -109,6 +109,9 @@ One cloud model can do both LM1 and LM2: much stronger than a laptop model and f
 Get a free key at aistudio.google.com, then either `copy .env.gemini .env` and paste it as `GEMINI_API_KEY`, or
 paste it in the app's API key box (it is sent only with uploads, kept in server memory, never written to disk).
 
+- The record is written from `app/llm/prompts/lm2_document_cloud.txt`, a full minute-taking brief (executive
+  summary, topic-by-topic minutes with positions and reasons, decisions, tasks, speaker checks). Small local
+  models keep the shorter `lm2_document.txt`. A test runs the brief's own example through the verifier.
 - The request asks for the exact record structure (`json_schema`); providers that reject it get JSON mode with
   the structure in the prompt. The guard, verifier and speaker-name checks still check every edit and item.
 - With a key, the cloud model is the only language model: the local Ollama model runs only for uploads without a

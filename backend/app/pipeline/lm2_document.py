@@ -105,10 +105,14 @@ async def document(ctx: "JobContext") -> None:
     refined = ctx.read("refined_transcript.json")
     lines = transcript_lines(refined, with_speaker=True)
     candidates = find_candidates([Segment(**x) for x in refined])
-    system = load_prompt("lm2_document")
-    record_schema = LM2Output if s.LM2_SCRATCHPAD else LM2Record
-    if not s.LM2_SCRATCHPAD:
-        system += NO_SCRATCHPAD_NOTE
+    # A cloud model gets the full minute-taking brief and thinks before it answers (no written scratchpad,
+    # which would only double its output). Small local models keep the short prompt with its procedure.
+    scratchpad = s.LM2_SCRATCHPAD and not ctx.cloud
+    record_schema = LM2Output if scratchpad else LM2Record
+    if ctx.cloud:
+        system = load_prompt("lm2_document_cloud")
+    else:
+        system = load_prompt("lm2_document") + ("" if scratchpad else NO_SCRATCHPAD_NOTE)
 
     async def on_retry(msg: str) -> None:
         await ctx.progress(0.5, f"Writing the meeting record: {msg}")
@@ -117,7 +121,7 @@ async def document(ctx: "JobContext") -> None:
     # Without the scratchpad a short meeting's record fits in 4096 tokens; a smaller cap also means a smaller
     # num_ctx, which Ollama allocates and processes faster.
     if n_segments <= 150:  # up to ~10 minutes: the record (plus scratchpad) fits well inside these caps
-        lm2_max_tokens = 6144 if s.LM2_SCRATCHPAD else 4096
+        lm2_max_tokens = 6144 if scratchpad else 4096
     else:
         lm2_max_tokens = 8192
     call = lambda user, schema=record_schema, mt=lm2_max_tokens: ctx.llm.json_call(  # noqa: E731

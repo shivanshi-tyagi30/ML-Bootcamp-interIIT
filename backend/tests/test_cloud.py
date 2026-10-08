@@ -15,6 +15,14 @@ from app.models.llm_io import LM2Output, Vocabulary
 GOOD = {"domain": "ml", "terms": []}
 
 
+@pytest.fixture(autouse=True)
+def fresh_model_choice(monkeypatch):
+    from app.llm import client as client_mod
+
+    monkeypatch.setattr(client_mod, "RESOLVED_MODELS", {})
+    monkeypatch.setattr(client_mod, "BUSY_SWITCH", {})
+
+
 def mock(monkeypatch, handler):
     real = httpx.AsyncClient
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
@@ -49,8 +57,25 @@ def test_asks_for_our_exact_json_structure_and_leaves_room_for_thinking(monkeypa
     body = rec.bodies[0]
     fmt = body["response_format"]
     assert fmt["type"] == "json_schema" and "$ref" not in json.dumps(fmt) and "$defs" not in json.dumps(fmt)
-    assert body["max_tokens"] >= 8192 and body["reasoning_effort"] == "low"
+    assert body["max_tokens"] >= 8192 and body["reasoning_effort"] == "minimal"  # a code-checked step
     assert body["model"] == "gemini-2.5-flash"
+
+
+def test_record_keeps_the_configured_thinking_level(monkeypatch):
+    rec = Recorder(reply(json.dumps({"summary": []})))
+    mock(monkeypatch, rec)
+    run(GeminiClient("key"), schema=LM2Output)
+    assert rec.bodies[0]["reasoning_effort"] == "low"
+
+
+def test_model_without_minimal_thinking_uses_the_configured_level(monkeypatch):
+    rec = Recorder(httpx.Response(400, text="Invalid reasoning_effort value 'minimal'"), reply(json.dumps(GOOD)),
+                   reply(json.dumps(GOOD)))
+    mock(monkeypatch, rec)
+    client = GeminiClient("key")
+    run(client)
+    run(client)
+    assert [b["reasoning_effort"] for b in rec.bodies] == ["minimal", "low", "low"]
 
 
 def test_full_record_schema_is_inlined_for_the_provider():
@@ -216,8 +241,38 @@ def test_overloaded_model_switches_to_another_cloud_model_not_the_local_one(monk
     mock(monkeypatch, handler)
     client = GeminiClient("key", "gemini-2.5-flash")
     assert run(client).domain == "ml"
-    assert seen == ["gemini-2.5-flash"] * 4 + ["gemini-2.0-flash"]
+    assert seen == ["gemini-2.5-flash"] * 2 + ["gemini-2.0-flash"]
     assert client.model == "gemini-2.0-flash" and client.name == "gemini-2.0-flash (cloud)"
+    # The next job starts on the model that answered instead of waiting on the busy one again.
+    seen.clear()
+    assert run(GeminiClient("key", "gemini-2.5-flash")).domain == "ml" and seen == ["gemini-2.0-flash"]
+
+
+def test_stalled_model_is_given_up_on_and_another_model_answers(monkeypatch):
+    models = {"data": [{"id": "models/gemini-2.5-flash"}, {"id": "models/gemini-2.0-flash"}]}
+    seen, timeouts = [], []
+
+    def handler(req):
+        if req.method == "GET":
+            return httpx.Response(200, json=models)
+        body = json.loads(req.content)
+        seen.append(body["model"])
+        timeouts.append(req.extensions["timeout"]["read"])
+        if body["model"] == "gemini-2.5-flash":
+            raise httpx.ReadTimeout("stalled", request=req)
+        return reply(json.dumps(GOOD))
+
+    mock(monkeypatch, handler)
+    messages = []
+
+    async def note(msg):
+        messages.append(msg)
+
+    client = GeminiClient("key", "gemini-2.5-flash", timeout=300)
+    out = asyncio.run(client.json_call("lm", "sys", "user", Vocabulary, 1, on_retry=note))
+    assert out.domain == "ml" and seen == ["gemini-2.5-flash", "gemini-2.0-flash"]
+    assert timeouts[0] < 70  # a short request is not left hanging for the full 300 s
+    assert messages and "switching to gemini-2.0-flash" in messages[0]
 
 
 def test_every_model_overloaded_is_a_clear_retry_message(monkeypatch):
