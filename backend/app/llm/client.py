@@ -264,6 +264,10 @@ class GeminiClient:
         self.base_url = base_url.rstrip("/")
         # A retired model replaced once is replaced for every later job too (no repeated 404s).
         self.model = RESOLVED_MODELS.get((self.base_url, self.requested), self.requested)
+        # A model that was busy a few minutes ago: start this job on the one that answered instead.
+        switched, until = BUSY_SWITCH.get((self.base_url, self.requested), ("", 0.0))
+        if switched and time.monotonic() < until:
+            self.model = switched
         self.timeout = timeout
         self.reasoning_effort = reasoning_effort.strip()
         self.schema_in_prompt = False  # set after a provider rejects json_schema
@@ -299,15 +303,22 @@ class GeminiClient:
             body["reasoning_effort"] = self.reasoning_effort
         return body
 
+    def _timeout_for(self, body: dict[str, Any]) -> float:
+        """Seconds to wait for one answer: enough for the input size, so a stalled request is given up on
+        (and another model tried) in about a minute rather than after CLOUD_TIMEOUT_SEC."""
+        chars = sum(len(m.get("content") or "") for m in body["messages"])
+        return min(float(self.timeout), CLOUD_MIN_TIMEOUT + chars / 1000)
+
     async def _post(self, body: dict[str, Any]) -> httpx.Response:
-        """POST, waiting and retrying a few times on rate limits and server errors ("high demand")."""
+        """POST, with one short wait-and-retry on rate limits and server errors ("high demand"); after that the
+        caller tries another model, which is much faster than waiting for a busy one."""
         url = f"{self.base_url}/chat/completions"
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         for attempt in range(CLOUD_BUSY_RETRIES + 1):
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self._timeout_for(body)) as client:
                 r = await client.post(url, headers=headers, json=body)
             if r.status_code in BUSY and attempt < CLOUD_BUSY_RETRIES:
-                wait = min(float(r.headers.get("retry-after") or 0) or CLOUD_BUSY_WAIT * 2 ** attempt, 30.0)
+                wait = min(float(r.headers.get("retry-after") or 0) or CLOUD_BUSY_WAIT, CLOUD_MAX_WAIT)
                 log.warning("cloud LLM HTTP %d; retrying in %.0f s", r.status_code, wait)
                 await asyncio.sleep(wait)
                 continue
@@ -334,7 +345,20 @@ class GeminiClient:
             await self._discover_model()
         return pick_chat_model([m for m in self._available if m not in self._tried])
 
-    async def _call(self, messages: list[dict[str, str]], schema: type[BaseModel], max_tokens: int) -> str:
+    async def _switch(self, why: str, notify: OnRetry | None) -> bool:
+        """Move to another model after the current one was busy or too slow; False when none is left."""
+        backup = await self._busy_backup()
+        if not backup:
+            return False
+        log.warning("cloud model %s %s; switching to %s", self.model, why, backup)
+        if notify:
+            await notify(f"{self.model} {why}, switching to {backup}")
+        BUSY_SWITCH[(self.base_url, self.requested)] = (backup, time.monotonic() + BUSY_SWITCH_SEC)
+        self.model = backup
+        return True
+
+    async def _call(self, messages: list[dict[str, str]], schema: type[BaseModel], max_tokens: int,
+                    notify: OnRetry | None = None) -> str:
         """One completed call; adapts to providers that reject json_schema or reasoning_effort, to retired
         models, and to a model that stays overloaded (switches to another cloud model, never to the local one)."""
         for _ in range(8):
@@ -343,7 +367,10 @@ class GeminiClient:
             try:
                 r = await self._post(body)
             except httpx.TimeoutException as e:
-                raise LLMUnavailable(f"{self.model} took longer than {self.timeout} s.") from e
+                if await self._switch(f"did not answer within {self._timeout_for(body):.0f} s", notify):
+                    continue
+                raise LLMUnavailable(f"{self.model} did not answer in time. Wait a minute and press Retry: "
+                                     "finished steps are kept.") from e
             if r.status_code == 400:
                 text = r.text.lower()
                 if "reasoning" in text and self.reasoning_effort:
@@ -354,12 +381,8 @@ class GeminiClient:
                     continue
             if r.status_code in (401, 403):
                 raise LLMUnavailable("The cloud model rejected the API key. Check the key and try again.")
-            if r.status_code in BUSY:
-                backup = await self._busy_backup()
-                if backup:
-                    log.warning("cloud model %s busy (HTTP %d); switching to %s", self.model, r.status_code, backup)
-                    self.model = backup
-                    continue
+            if r.status_code in BUSY and await self._switch(f"is busy (HTTP {r.status_code})", notify):
+                continue
             if r.status_code == 429:
                 raise LLMUnavailable("The cloud model's free-tier rate limit was reached. Wait a minute and retry.")
             if r.status_code in BUSY:
@@ -394,7 +417,7 @@ class GeminiClient:
         for attempt in range(max_retries + 1):
             t0 = time.perf_counter()
             try:
-                text = await self._call(messages, schema, max_tokens)
+                text = await self._call(messages, schema, max_tokens, on_retry)
             except httpx.TransportError as e:  # a key means cloud only: never a silent switch to the local model
                 raise LLMUnavailable("Can't reach the cloud model. Check the internet connection and press Retry: "
                                      "finished steps are kept.") from e
@@ -416,8 +439,12 @@ class GeminiClient:
 
 
 BUSY = (429, 500, 502, 503, 504)
-CLOUD_BUSY_RETRIES = 3  # waits of 4, 8 and 16 s before trying another model
-CLOUD_BUSY_WAIT = 4.0
+CLOUD_BUSY_RETRIES = 1  # one short wait, then another model (a busy model often stays busy for minutes)
+CLOUD_BUSY_WAIT = 2.0
+CLOUD_MAX_WAIT = 10.0  # cap on the provider's retry-after
+CLOUD_MIN_TIMEOUT = 60.0  # seconds for a short request; +1 s per 1000 characters of input
+BUSY_SWITCH: dict[tuple[str, str], tuple[str, float]] = {}  # (url, requested) -> (model that answered, until)
+BUSY_SWITCH_SEC = 15 * 60
 
 NOT_CHAT = ("embed", "image", "tts", "audio", "live", "vision", "aqa", "veo", "imagen", "learnlm", "robotics",
             "computer-use", "native", "transcribe", "lyria", "nano", "gemma")
