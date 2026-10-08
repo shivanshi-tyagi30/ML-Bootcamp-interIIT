@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, type Api } from "../lib/api";
 import type { TranscriptMode } from "../lib/annotate";
 import { fmtTime } from "../lib/format";
+import { changedWords, renameSpeakerWord, wordAt } from "../lib/renameSpeaker";
 import type { JobError, PartialRecord, Segment } from "../lib/types";
 import { useAudio } from "../lib/useAudio";
 import { DownloadMenu } from "./DownloadMenu";
@@ -108,11 +109,16 @@ export function Workspace({ api, jobId, record: initialRecord, audioUrl, error, 
         });
       };
 
-      return {
+      const next: PartialRecord = {
         ...prev,
         raw_transcript: updateSegList(prev.raw_transcript),
         refined_transcript: updateSegList(prev.refined_transcript),
       };
+      // Correcting part of a speaker's name ("Kyagi" -> "Tyagi") renames that speaker everywhere.
+      const before = [prev.raw_transcript, prev.refined_transcript].map((l) =>
+        wordAt(l?.find((s) => s.id === segmentId), wordIdx),
+      );
+      return [...new Set(before)].reduce<PartialRecord>((rec, old) => renameSpeakerWord(rec, old, trimmed), next);
     });
   }, []);
 
@@ -144,11 +150,16 @@ export function Workspace({ api, jobId, record: initialRecord, audioUrl, error, 
         });
       };
 
-      return {
+      const next: PartialRecord = {
         ...prev,
         raw_transcript: updateSegList(prev.raw_transcript),
         refined_transcript: updateSegList(prev.refined_transcript),
       };
+      const pairs = [prev.raw_transcript, prev.refined_transcript].flatMap((l) => {
+        const seg = l?.find((s) => s.id === segmentId);
+        return seg ? changedWords(seg.text, trimmed) : [];
+      });
+      return pairs.reduce<PartialRecord>((rec, [old, now]) => renameSpeakerWord(rec, old, now), next);
     });
   }, []);
 
