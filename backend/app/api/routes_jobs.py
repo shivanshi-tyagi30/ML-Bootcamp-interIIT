@@ -224,8 +224,13 @@ async def cancel_job(job_id: str, state: AppState = Depends(get_state)) -> Any:
 
 
 @router.post("/jobs/{job_id}/retry", status_code=202, response_model=JobSummary)
-async def retry_job(job_id: str, state: AppState = Depends(get_state)) -> Any:
-    """Run a failed or cancelled job again, resuming after the last saved stage."""
+async def retry_job(job_id: str, request: Request, api_key: str | None = Form(None),
+                    state: AppState = Depends(get_state)) -> Any:
+    """Run a failed or cancelled job again, resuming after the last saved stage.
+
+    The cloud API key is sent again with the retry: keys live in memory only, so a restarted server
+    would otherwise retry on the local model.
+    """
     row = await get_job_or_none(state, job_id)
     if row is None:
         return error_response("E_NOT_FOUND")
@@ -233,6 +238,9 @@ async def retry_job(job_id: str, state: AppState = Depends(get_state)) -> Any:
         return error_response("E_JOB_RUNNING")
     if row["status"] == "completed":
         return JobSummary.from_row(row)
+    key = (api_key or request.headers.get("x-gemini-key") or "").strip()
+    if key:
+        remember_api_key(job_id, key)
     await state.db.update(job_id, status="queued", stage="queued", error_code=None, error_message=None,
                           error_detail=None)
     state.schedule(job_id)

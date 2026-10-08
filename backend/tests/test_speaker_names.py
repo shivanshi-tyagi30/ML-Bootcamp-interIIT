@@ -197,3 +197,39 @@ def test_pipeline_applies_verified_model_names_to_transcript_and_record(settings
     rec = read_json(d / "record.json")
     # "Arjun" is not said in S002, so the model's guess is rejected and the label stays.
     assert all(s["speaker"] != "Arjun" for s in rec["refined_transcript"])
+
+
+def _fix(sid, speaker):
+    from app.models.llm_io import LM2SpeakerFix
+
+    return LM2SpeakerFix(segment_id=sid, speaker=speaker, reason="test")
+
+
+def test_model_moves_a_short_reply_to_the_other_speaker_then_names_both():
+    from app.models.llm_io import LM2Output, LM2Speaker
+    from app.pipeline.verify import apply_model_names
+
+    segs = _alex_sara()
+    segs[5] = segs[5].model_copy(update={"speaker": "Speaker 2"})  # voice model gave Alex's "Ok" to Sara
+    lm2 = LM2Output(
+        speakers=[LM2Speaker(label="Speaker 2", name="Sara", evidence_segment_id="S001"),
+                  LM2Speaker(label="Speaker 1", name="Alex", evidence_segment_id="S003")],
+        speaker_fixes=[_fix("S006", "Speaker 1")],
+    )
+    _, raw, refined, named, fixes = apply_model_names(lm2, segs, segs)
+    assert fixes == {"S006": "Speaker 1"}
+    assert {k: v["name"] for k, v in named.items()} == {"Speaker 2": "Sara", "Speaker 1": "Alex"}
+    assert [s.speaker for s in refined] == ["Alex", "Alex", "Sara", "Sara", "Sara", "Alex"]
+    assert [s.speaker for s in raw] == [s.speaker for s in refined]
+
+
+@pytest.mark.parametrize("fixes", [
+    [_fix("S004", "Speaker 1")],                            # a long line: the voice label stays
+    [_fix("S006", "Speaker 9")],                            # no such speaker
+    [_fix("S006", "Speaker 1")],                            # already that speaker
+    [_fix("S003", "Speaker 1"), _fix("S006", "Speaker 2")],  # moving over 20% of lines: all ignored
+])
+def test_unsafe_speaker_fixes_are_rejected(fixes):
+    from app.pipeline.speaker_names import verify_speaker_fixes
+
+    assert verify_speaker_fixes(fixes, _alex_sara()) == {}

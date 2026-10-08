@@ -20,7 +20,7 @@ from app.models.record import (
 from app.pipeline.candidates import CONVERSATIONAL_AGREE, FIRST_PERSON_COMMIT, PROPOSAL_CUE, REQUEST, TASK_CUE, is_agreeing_reply
 from app.pipeline.fidelity import compute_fidelity
 from app.pipeline.guard import _word_spans
-from app.pipeline.speaker_names import rename_in_text, verify_llm_names
+from app.pipeline.speaker_names import rename_in_text, verify_llm_names, verify_speaker_fixes
 
 if TYPE_CHECKING:
     from app.pipeline.runner import JobContext
@@ -311,11 +311,19 @@ def build_meta(ctx: "JobContext") -> Meta:
 
 
 def apply_model_names(lm2: LM2Output, raw: list[Segment], refined: list[Segment]):
-    """Verified LM2 speaker names applied to both transcripts and to LM2's own text ("Speaker 2 reported...")."""
+    """Verified LM2 speaker fixes and names applied to both transcripts and to LM2's own text.
+
+    Returns (lm2, raw, refined, names, fixes): names maps a "Speaker N" label to {"name", ...}; fixes maps a
+    segment id to the speaker it was moved to.
+    """
+    fixes = verify_speaker_fixes(lm2.speaker_fixes, refined)
+    if fixes:
+        refined = [s.model_copy(update={"speaker": fixes[s.id]}) if s.id in fixes else s for s in refined]
+        raw = [s.model_copy(update={"speaker": fixes[s.id]}) if s.id in fixes else s for s in raw]
     taken = {s.speaker for s in refined if s.speaker and not re.fullmatch(r"Speaker \d+", s.speaker)}
     named = verify_llm_names(lm2.speakers, refined, taken)
     if not named:
-        return lm2, raw, refined, {}
+        return lm2, raw, refined, {}, fixes
     relabel = lambda segs: [s.model_copy(update={"speaker": named[s.speaker]["name"]})  # noqa: E731
                             if s.speaker in named else s for s in segs]
     fix = lambda t: rename_in_text(t, named)  # noqa: E731
@@ -328,7 +336,7 @@ def apply_model_names(lm2: LM2Output, raw: list[Segment], refined: list[Segment]
         "open_proposals": [p.model_copy(update={"proposal": fix(p.proposal)}) for p in lm2.open_proposals],
         "action_items": [a.model_copy(update={"task": fix(a.task)}) for a in lm2.action_items],
     })
-    return lm2, relabel(raw), relabel(refined), named
+    return lm2, relabel(raw), relabel(refined), named, fixes
 
 
 async def verify_record(ctx: "JobContext") -> None:
@@ -339,7 +347,10 @@ async def verify_record(ctx: "JobContext") -> None:
     lm2 = LM2Output(**ctx.read(ctx.output_name(Stage.DOCUMENTING)))
     diar = ctx.read(ctx.output_name(Stage.DIARIZING)) or {}
     if ctx.settings.SPEAKER_NAMES_FROM_TRANSCRIPT:
-        lm2, raw, refined, named = apply_model_names(lm2, raw, refined)
+        lm2, raw, refined, named, fixes = apply_model_names(lm2, raw, refined)
+        if fixes:
+            ctx.log.info("speaker fixes from LM2 (verified): %s", fixes)
+            ctx.write("speaker_fixes.json", fixes)
         if named:
             ctx.log.info("speaker names from LM2 (verified): %s", {k: v["name"] for k, v in named.items()})
             ctx.write("speaker_names.json", {**(ctx.read("speaker_names.json") or {}), **named})

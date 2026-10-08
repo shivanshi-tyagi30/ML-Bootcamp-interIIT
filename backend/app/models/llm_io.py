@@ -91,11 +91,20 @@ class LM2Speaker(BaseModel):
     evidence_segment_id: str = ""
 
 
+class LM2SpeakerFix(BaseModel):
+    """A short line LM2 believes was said by a different person than its voice label says; checked by code."""
+
+    segment_id: str
+    speaker: str
+    reason: str = ""
+
+
 class LM2Record(BaseModel):
     """LM2 output without a scratchpad (LM2_SCRATCHPAD=false). Missing lists count as empty; the verifier
     removes anything that is not properly cited, so a small slip no longer fails the whole job."""
 
     speakers: list[LM2Speaker] = []
+    speaker_fixes: list[LM2SpeakerFix] = []
     summary: list[LM2Sentence] = []
     minutes: list[LM2Topic] = []
     decisions: list[LM2Decision] = []
@@ -108,6 +117,7 @@ class LM2Output(BaseModel):
 
     scratchpad: str = ""
     speakers: list[LM2Speaker] = []
+    speaker_fixes: list[LM2SpeakerFix] = []
     summary: list[LM2Sentence] = []
     minutes: list[LM2Topic] = []
     decisions: list[LM2Decision] = []

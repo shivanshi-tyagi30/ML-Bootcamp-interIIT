@@ -456,3 +456,26 @@ def test_ten_minute_record_with_scratchpad_fits_a_12k_context():
     from app.llm.client import context_size
 
     assert context_size("x" * 4000, "y" * 9000, 6144, 32768) == 12288
+
+
+def test_retry_resends_the_cloud_key_in_memory_only(settings, fixtures_dir):
+    from app.core.storage import job_dir
+    from app.pipeline.runner import JOB_API_KEYS
+
+    async def runner(job_id: str) -> None:
+        state = holder["app"].state.trace
+        await state.db.update(job_id, status="failed", stage="failed", error_code="E_CANCELLED")
+
+    holder = {}
+    app = create_app(settings=settings, runner=runner)
+    holder["app"] = app
+    with TestClient(app) as c:
+        with open(fixtures_dir / "tone.wav", "rb") as f:
+            job_id = c.post("/api/jobs", files={"file": ("tone.wav", f)}).json()["job_id"]
+        _wait(c, job_id, {"failed"})
+        JOB_API_KEYS.pop(job_id, None)  # as after a server restart
+        assert c.post(f"/api/jobs/{job_id}/retry", data={"api_key": "secret-key"}).status_code == 202
+        assert JOB_API_KEYS.get(job_id) == "secret-key"
+        files = job_dir(settings.jobs_dir, job_id).rglob("*.json")
+        assert all("secret-key" not in p.read_text() for p in files)
+    JOB_API_KEYS.pop(job_id, None)

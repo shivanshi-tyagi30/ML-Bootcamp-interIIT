@@ -27,6 +27,11 @@ DEFINITIONS
   line where the name is said: that speaker introducing themselves, someone addressing them by name just
   before they reply, or them being greeted right after they spoke. Use your understanding of the
   conversation, not keywords. Never guess a name from a role; leave out labels you cannot name.
+- SPEAKER CHECK: voice labels come from audio and are sometimes wrong on very short replies ("Ok", "Yes",
+  "Sure, I'll do it"). If the conversation makes it clear that such a short line was said by the OTHER
+  person (e.g. someone cannot answer their own question or agree with themselves), output
+  {"segment_id": "S006", "speaker": "<an existing label or name>", "reason": "..."} in speaker_fixes.
+  Only fix lines you are sure about; never invent new speakers.
 - SELF-CORRECTION: if a speaker corrects themselves ("Friday... no, Monday"),
   the LAST stated value counts. Point to that one.
 - SUMMARY and MINUTES are YOUR notes, written like a professional minute-taker, NOT the transcript:
@@ -52,8 +57,12 @@ Summary and minutes are never empty when anything was discussed (even "Introduct
 EXAMPLES
 [S001] (Speaker 1) Hi Sara, let's finalize the model architecture.
 [S002] (Speaker 2) Hello Alex. I strongly disagree with standard Whisper.
+[S003] (Speaker 2) We need WhisperX so we can map tasks to people.
+[S004] (Speaker 2) Ok.
+[S005] (Speaker 1) Fine, you are right. WhisperX it is.
 -> speakers: [{"label":"Speaker 2","name":"Sara","evidence_segment_id":"S001"},
               {"label":"Speaker 1","name":"Alex","evidence_segment_id":"S002"}]
+   speaker_fixes: [{"segment_id":"S004","speaker":"Speaker 1","reason":"Alex accepts Sara's proposal"}]
 
 [S010] (A) Maybe we should move the vector store to Postgres.
 [S011] (B) Yeah, could be cheaper.
@@ -110,4 +119,5 @@ EXAMPLES
    ]
    (WRONG: {"text": "Let's postpone that. For now we'll accept uploaded recordings only."} copies the transcript.)
 
-Output only JSON with these fields: speakers, summary, minutes, decisions, open_proposals, action_items.
+Output only JSON with these fields: speakers, speaker_fixes, summary, minutes, decisions, open_proposals,
+action_items.
