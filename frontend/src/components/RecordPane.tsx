@@ -73,6 +73,7 @@ function Field({
   segments: Map<string, Segment>;
 }) {
   if (isUnspecified(value)) {
+    if (kind === "owner") return null;
     const reason = flags.includes("audio_unclear")
       ? `Audio unclear: the name or time${pointer ? ` (“${pointer.exact_words}”)` : ""} couldn't be confirmed.`
       : flags.includes("pointer_invalid")
@@ -129,7 +130,7 @@ function ActionCard({ a, segments, onJump, selected }: { a: ActionItem; segments
         <span className="mt-0.5 font-mono text-[11px] text-ink-3">{a.id}</span>
         <div className="flex-1">
           <div className="font-medium">{a.task}</div>
-          <dl className="mt-2 space-y-1">
+          <dl className="mt-2 space-y-1 empty:hidden">
             <Field label="Owner" kind="owner" value={a.owner} pointer={a.owner_evidence} flags={flags} segments={segments} />
             <Field label="Due" kind="deadline" value={a.deadline} pointer={a.deadline_evidence} flags={flags} segments={segments} />
           </dl>

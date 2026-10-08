@@ -19,24 +19,9 @@ function Stat({ label, value, tip, tone }: { label: string; value: string; tip: 
   );
 }
 
-const fullMatch = (v?: string) => {
-  const m = v?.match(/^(\d+)\s*\/\s*(\d+)$/);
-  return m ? m[1] === m[2] : undefined;
-};
-
 /** Plan 11.3: accuracy visible at a glance. */
 export function Scorecard({ f }: { f: Fidelity }) {
   const items = [];
-  if (f.numbers_preserved)
-    items.push(
-      <Stat key="n" label="Numbers" value={f.numbers_preserved} tone={fullMatch(f.numbers_preserved) ? "ok" : "bad"}
-        tip="Numbers in the raw transcript that are unchanged in the refined transcript and the record." />,
-    );
-  if (f.negations_preserved)
-    items.push(
-      <Stat key="g" label="Negations" value={f.negations_preserved} tone={fullMatch(f.negations_preserved) ? "ok" : "bad"}
-        tip="“not”, “never”, “can't” and similar words kept through refinement." />,
-    );
   if (f.edits_accepted != null)
     items.push(
       <Stat key="e" label="Edits" value={`${f.edits_accepted} applied · ${f.edits_rejected ?? 0} blocked`}
@@ -46,16 +31,6 @@ export function Scorecard({ f }: { f: Fidelity }) {
     items.push(
       <Stat key="d" label="Disputed words" value={String(f.disputed_words)} tone={f.disputed_words ? "warn" : undefined}
         tip="Words where the second speech model heard something different. Facts resting on them become “Unspecified”." />,
-    );
-  if (f.items_downgraded_by_verifier != null)
-    items.push(
-      <Stat key="v" label="Downgraded by verifier" value={String(f.items_downgraded_by_verifier)}
-        tip="Owners, deadlines or decisions the verifier removed or downgraded because the transcript didn't support them." />,
-    );
-  if (f.sentences_removed_by_verifier != null)
-    items.push(
-      <Stat key="s" label="Sentences removed" value={String(f.sentences_removed_by_verifier)}
-        tip="Summary or minutes sentences the verifier deleted because they mentioned a number or name not in their cited lines." />,
     );
   if (f.transcript_coverage_pct != null)
     items.push(
