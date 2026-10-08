@@ -8,6 +8,7 @@ export interface AudioControls {
   duration: number;
   rate: number;
   toggle: () => void;
+  pause: () => void;
   /** Seek and start playing. */
   playFrom: (t: number) => void;
   seek: (t: number) => void;
@@ -64,10 +65,14 @@ export function useAudio(src: string | null, fallbackDuration = 0): AudioControl
     else a.pause();
   }, [src]);
 
+  const pause = useCallback(() => {
+    ref.current?.pause();
+  }, []);
+
   const setRate = useCallback((r: number) => {
     if (ref.current) ref.current.playbackRate = r;
     setRateState(r);
   }, []);
 
-  return { ref, available: !!src, playing, time, duration, rate, toggle, playFrom, seek, setRate };
+  return { ref, available: !!src, playing, time, duration, rate, toggle, pause, playFrom, seek, setRate };
 }

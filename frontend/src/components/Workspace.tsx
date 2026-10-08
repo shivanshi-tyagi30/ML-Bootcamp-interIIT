@@ -27,9 +27,15 @@ interface Props {
 /** Plays a moment slightly early so the listener hears it in context. */
 const LEAD_IN_S = 2;
 
-export function Workspace({ api, jobId, record, audioUrl, error, theme, onTheme, onNew, onRetry }: Props) {
+export function Workspace({ api, jobId, record: initialRecord, audioUrl, error, theme, onTheme, onNew, onRetry }: Props) {
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
+  const [record, setRecord] = useState<PartialRecord>(initialRecord);
+
+  useEffect(() => {
+    setRecord(initialRecord);
+  }, [initialRecord]);
+
   const raw = record.raw_transcript ?? [];
   const audio = useAudio(audioUrl, record.meta.duration_s ?? raw.at(-1)?.end ?? 0);
   const [mode, setMode] = useState<TranscriptMode>(record.refinement ? "diff" : "raw");
@@ -39,14 +45,113 @@ export function Workspace({ api, jobId, record, audioUrl, error, theme, onTheme,
 
   const segments = useMemo(() => new Map<string, Segment>(raw.map((s) => [s.id, s])), [raw]);
 
-  // Coverage dimming: lines not cited by any summary or minutes sentence.
-  const cited = useMemo(() => {
-    if (!record.summary) return null;
-    const ids = new Set<string>();
-    record.summary.forEach((s) => s.evidence_segment_ids.forEach((i) => ids.add(i)));
-    record.minutes?.forEach((t) => t.points.forEach((p) => p.evidence_segment_ids.forEach((i) => ids.add(i))));
-    return ids;
-  }, [record]);
+  const handleStartEdit = useCallback(() => {
+    if (audio.playing) {
+      audio.pause();
+    }
+  }, [audio]);
+
+  const handleUpdateWord = useCallback((segmentId: string, wordIdx: number, newWord: string) => {
+    const trimmed = newWord.trim();
+    if (!trimmed) return;
+
+    setRecord((prev) => {
+      const updateSegList = (list?: Segment[]) => {
+        if (!list) return list;
+        return list.map((seg) => {
+          if (seg.id !== segmentId) return seg;
+
+          const newTokens = trimmed.split(/\s+/);
+          const words = seg.words ? seg.words.map((w) => ({ ...w })) : undefined;
+          let newText = seg.text;
+
+          if (words && words.length > 0 && wordIdx >= 0 && wordIdx < words.length) {
+            const origW = words[wordIdx];
+            const start = origW.start;
+            const end = origW.end;
+            const dur = Math.max(0.15, end - start);
+            const step = dur / newTokens.length;
+
+            const createdWords = newTokens.map((w, idx) => ({
+              w,
+              start: +(start + idx * step).toFixed(2),
+              end: +(start + (idx + 1) * step).toFixed(2),
+              conf: origW.conf ?? 1.0,
+            }));
+
+            words.splice(wordIdx, 1, ...createdWords);
+
+            const textTokens = seg.text.split(/(\s+)/);
+            let wCount = 0;
+            const nextTokens = textTokens.map((tok) => {
+              if (/^\s+$/.test(tok)) return tok;
+              if (wCount++ === wordIdx) return newTokens.join(" ");
+              return tok;
+            });
+            newText = nextTokens.join("");
+          } else {
+            const textTokens = seg.text.split(/(\s+)/);
+            let wCount = 0;
+            const nextTokens = textTokens.map((tok) => {
+              if (/^\s+$/.test(tok)) return tok;
+              if (wCount++ === wordIdx) return newTokens.join(" ");
+              return tok;
+            });
+            newText = nextTokens.join("");
+          }
+
+          return {
+            ...seg,
+            text: newText,
+            words,
+          };
+        });
+      };
+
+      return {
+        ...prev,
+        raw_transcript: updateSegList(prev.raw_transcript),
+        refined_transcript: updateSegList(prev.refined_transcript),
+      };
+    });
+  }, []);
+
+  const handleUpdateSentence = useCallback((segmentId: string, newSentence: string) => {
+    const trimmed = newSentence.trim();
+    if (!trimmed) return;
+
+    setRecord((prev) => {
+      const updateSegList = (list?: Segment[]) => {
+        if (!list) return list;
+        return list.map((seg) => {
+          if (seg.id !== segmentId) return seg;
+
+          const newTokens = trimmed.split(/\s+/);
+          const dur = Math.max(0.5, seg.end - seg.start);
+          const step = dur / newTokens.length;
+          const words = newTokens.map((w, idx) => ({
+            w,
+            start: +(seg.start + idx * step).toFixed(2),
+            end: +(seg.start + (idx + 1) * step).toFixed(2),
+            conf: 1.0,
+          }));
+
+          return {
+            ...seg,
+            text: trimmed,
+            words,
+          };
+        });
+      };
+
+      return {
+        ...prev,
+        raw_transcript: updateSegList(prev.raw_transcript),
+        refined_transcript: updateSegList(prev.refined_transcript),
+      };
+    });
+  }, []);
+
 
   const startOf = useCallback(
     (ids: string[]) => Math.min(...ids.map((i) => segments.get(i)?.start ?? Infinity)),
@@ -216,10 +321,14 @@ export function Workspace({ api, jobId, record, audioUrl, error, theme, onTheme,
           hasRefinement={!!record.refinement}
           mode={mode}
           onMode={setMode}
-          cited={cited}
           activeId={activeId}
+          currentTime={audio.time}
+          isPlaying={audio.playing}
           scrollTo={scrollTo}
           onSeek={(t) => audio.available && audio.playFrom(t)}
+          onUpdateWord={handleUpdateWord}
+          onUpdateSentence={handleUpdateSentence}
+          onStartEdit={handleStartEdit}
         />
         <RecordPane
           record={record}

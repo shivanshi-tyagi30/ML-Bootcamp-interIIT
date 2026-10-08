@@ -37,7 +37,7 @@ function Promise_({ label, value }: { label: string; value: string }) {
 
 export function UploadScreen({ error, busy, mock, theme, onTheme, api, onStart, onOpenJob, onSample, onClearError }: Props) {
   const [file, setFile] = useState<File | null>(null);
-  const [glossary, setGlossary] = useState("");
+  const [title, setTitle] = useState("");
   const [drag, setDrag] = useState(false);
   const [localError, setLocalError] = useState<JobError | null>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -90,9 +90,7 @@ export function UploadScreen({ error, busy, mock, theme, onTheme, api, onStart, 
           </h1>
 
           <p className="mt-6 max-w-[520px] text-[16px] leading-relaxed text-ink-2">
-            Drop in a recording. Trace writes down what was said, fixes the jargon it misheard, and pulls out the
-            decisions and to-dos, each linked to the moment it was said. If nobody named an owner, we won't make one
-            up.
+            Drop in any meeting recording. Trace transcribes what was said, corrects misheard technical terms, and extracts action items with exact time-linked audio proof. No made-up owners or imagined deadlines.
           </p>
 
           <div className="mt-8 max-w-[560px] border border-ink bg-surface shadow-[8px_8px_0_var(--color-accent)]">
@@ -144,15 +142,21 @@ export function UploadScreen({ error, busy, mock, theme, onTheme, api, onStart, 
             </label>
 
             <div className="mx-3 mb-3">
-              <label htmlFor="glossary" className="font-mono text-[10.5px] tracking-[0.14em] text-ink-3">
-                EXPECTED TERMS · OPTIONAL
+              <label htmlFor="meeting-title" className="block font-mono text-[10.5px] font-semibold tracking-[0.14em] text-ink-2">
+                NAME OF THE MEETING · OPTIONAL
               </label>
               <input
-                id="glossary"
-                value={glossary}
-                onChange={(e) => setGlossary(e.target.value)}
-                placeholder="e.g. Priya, Kubernetes, RAG"
-                className="mt-1 h-9 w-full border-b border-line bg-transparent text-[14px] placeholder:text-ink-3/80 focus:border-ink focus:outline-none"
+                id="meeting-title"
+                type="text"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && file && !localError && !busy) {
+                    onStart(file, { title: title.trim(), glossary: "" });
+                  }
+                }}
+                placeholder="e.g. Meeting 1"
+                className="mt-1.5 h-10 w-full rounded-[2px] border border-ink/30 bg-surface px-3 text-[14px] font-medium text-ink placeholder:text-ink-3 transition-colors hover:border-ink/60 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
               />
             </div>
 
@@ -161,14 +165,12 @@ export function UploadScreen({ error, busy, mock, theme, onTheme, api, onStart, 
                 <button onClick={onSample} className="font-mono text-[11px] tracking-[0.1em] text-ink-2 hover:text-ink">
                   OPEN SAMPLE MEETING →
                 </button>
-              ) : (
-                <span className="font-mono text-[11px] text-ink-3">English speech works best</span>
-              )}
+              ) : null}
               <button
                 disabled={!!localError || busy}
                 // With no file yet, the button opens the file picker instead.
-                onClick={() => (file ? onStart(file, { title: "", glossary }) : input.current?.click())}
-                className="inline-flex h-10 items-center gap-2 bg-accent px-5 text-[14px] font-bold text-accent-ink transition hover:bg-ink hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={() => (file ? onStart(file, { title: title.trim(), glossary: "" }) : input.current?.click())}
+                className="ml-auto inline-flex h-10 items-center gap-2 bg-accent px-5 text-[14px] font-bold text-accent-ink transition hover:bg-ink hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {busy ? "Uploading…" : file ? "Start processing" : "Choose a recording"}
                 <span aria-hidden>→</span>
@@ -202,7 +204,7 @@ export function UploadScreen({ error, busy, mock, theme, onTheme, api, onStart, 
 
         <section className="relative hidden h-[560px] lg:block" aria-label="How Trace links a record to the recording">
           <div className="halftone absolute top-[40px] left-[26%] size-[430px] rounded-full" />
-          <div className="absolute top-[150px] left-[-2%] origin-top-left scale-[0.98] xl:scale-[1.05]">
+          <div className="absolute top-[110px] left-[-2%] origin-top-left scale-[0.98] xl:scale-[1.05]">
             <HeroIllustration />
           </div>
           <div className="absolute right-0 bottom-0 flex flex-col items-end gap-6">
@@ -211,11 +213,6 @@ export function UploadScreen({ error, busy, mock, theme, onTheme, api, onStart, 
           </div>
         </section>
       </main>
-
-      <footer className="relative z-10 flex flex-wrap items-center justify-between gap-2 border-t border-line px-5 py-3 font-mono text-[10.5px] tracking-[0.12em] text-ink-3 sm:px-10">
-        <span>INTER IIT TECH MEET 15.0 · ML PROBLEM STATEMENT</span>
-        <span>SPEECH → REFINE → RECORD</span>
-      </footer>
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { REJECT_REASONS, annotate, type Piece, type TranscriptMode } from "../lib/annotate";
 import { fmtTime } from "../lib/format";
 import type { Edit, RejectedEdit, Segment } from "../lib/types";
@@ -12,10 +12,14 @@ interface Props {
   hasRefinement: boolean;
   mode: TranscriptMode;
   onMode: (m: TranscriptMode) => void;
-  cited: Set<string> | null; // null = no record yet, so no dimming
   activeId: string | null;
+  currentTime?: number;
+  isPlaying?: boolean;
   scrollTo: { id: string; nonce: number } | null;
   onSeek: (t: number) => void;
+  onUpdateWord?: (segmentId: string, wordIdx: number, newWord: string) => void;
+  onUpdateSentence?: (segmentId: string, newSentence: string) => void;
+  onStartEdit?: () => void;
 }
 
 const pct = (c: number) => `${Math.round(c * 100)}%`;
@@ -86,27 +90,293 @@ function PieceView({ p, mode }: { p: Piece; mode: TranscriptMode }) {
   }
 }
 
-const Row = memo(function Row({
+function EditableWord({
+  word,
+  wordIdx,
+  segId,
+  onSeek,
+  onSave,
+  onStartEdit,
+  children,
+  className,
+}: {
+  word: string;
+  wordIdx: number;
+  segId: string;
+  onSeek?: () => void;
+  onSave?: (segmentId: string, wordIdx: number, newWord: string) => void;
+  onStartEdit?: () => void;
+  children?: React.ReactNode;
+  className?: string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(word);
+
+  useEffect(() => {
+    setDraft(word);
+  }, [word]);
+
+  const commit = () => {
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== word) {
+      onSave?.(segId, wordIdx, trimmed);
+    } else {
+      setDraft(word);
+    }
+    setEditing(false);
+  };
+
+  const cancel = () => {
+    setDraft(word);
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <input
+        ref={(el) => {
+          if (el) {
+            el.focus();
+            el.select();
+          }
+        }}
+        type="text"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commit();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            cancel();
+          }
+        }}
+        onBlur={commit}
+        onClick={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+        style={{ minWidth: "10ch", width: `${Math.max(10, draft.length + 2)}ch`, maxWidth: "100%" }}
+        className="inline-block text-[15px] font-semibold text-ink bg-surface border-2 border-accent rounded px-2 py-0.5 shadow-xs outline-none ring-2 ring-accent/30 z-30 relative -my-0.5 align-baseline text-accent-deep"
+      />
+    );
+  }
+
+  return (
+    <span
+      onClick={() => onSeek?.()}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        onStartEdit?.();
+        setDraft(word);
+        setEditing(true);
+      }}
+      title="Click to play · Double-click to edit"
+      className={className}
+    >
+      {children ?? word}
+    </span>
+  );
+}
+
+function SegmentContent({
   seg,
   pieces,
   mode,
-  dim,
   active,
+  currentTime,
+  isPlaying,
   onSeek,
+  onUpdateWord,
+  onStartEdit,
 }: {
   seg: Segment;
   pieces: Piece[];
   mode: TranscriptMode;
-  dim: boolean;
   active: boolean;
+  currentTime: number;
+  isPlaying: boolean;
   onSeek: (t: number) => void;
+  onUpdateWord?: (segmentId: string, wordIdx: number, newWord: string) => void;
+  onStartEdit?: () => void;
 }) {
+  const words = seg.words;
+  if (!words || !words.length) {
+    let wordCursor = 0;
+    return (
+      <p className="text-[15px] leading-relaxed">
+        {pieces.map((p, pIdx) => {
+          if (p.kind === "text") {
+            const tokens = p.text.split(/(\s+)/);
+            return (
+              <span key={pIdx}>
+                {tokens.map((tok, tIdx) => {
+                  if (!tok) return null;
+                  if (/^\s+$/.test(tok)) return <span key={tIdx}>{tok}</span>;
+                  const wIdx = wordCursor++;
+                  return (
+                    <EditableWord
+                      key={tIdx}
+                      word={tok}
+                      wordIdx={wIdx}
+                      segId={seg.id}
+                      onSave={onUpdateWord}
+                      onStartEdit={onStartEdit}
+                      className="inline-block scale-100 cursor-pointer hover:text-accent-deep"
+                    />
+                  );
+                })}
+              </span>
+            );
+          }
+          const wIdx = wordCursor++;
+          return (
+            <EditableWord
+              key={pIdx}
+              word={p.kind === "disputed" ? p.text : p.kind === "accepted" ? p.edit.replacement : p.edit.original}
+              wordIdx={wIdx}
+              segId={seg.id}
+              onSave={onUpdateWord}
+              onStartEdit={onStartEdit}
+              className="inline-block scale-100 cursor-pointer"
+            >
+              <PieceView p={p} mode={mode} />
+            </EditableWord>
+          );
+        })}
+      </p>
+    );
+  }
+
+  let activeWordIdx = -1;
+  if (active && isPlaying) {
+    activeWordIdx = words.findIndex((w, i, arr) => {
+      const nextStart = arr[i + 1]?.start ?? (w.end + 0.35);
+      return currentTime >= w.start && currentTime < Math.max(w.end, nextStart);
+    });
+  }
+
+  let wordCursor = 0;
+
+  return (
+    <p className="text-[15px] leading-relaxed">
+      {pieces.map((p, pIdx) => {
+        if (p.kind === "text") {
+          const tokens = p.text.split(/(\s+)/);
+          return (
+            <span key={pIdx}>
+              {tokens.map((tok, tIdx) => {
+                if (!tok) return null;
+                if (/^\s+$/.test(tok)) {
+                  return <span key={tIdx}>{tok}</span>;
+                }
+                const wIdx = wordCursor++;
+                const w = words[wIdx];
+                const isCurrent = wIdx === activeWordIdx;
+                return (
+                  <EditableWord
+                    key={tIdx}
+                    word={tok}
+                    wordIdx={wIdx}
+                    segId={seg.id}
+                    onSeek={w ? () => onSeek(w.start) : undefined}
+                    onSave={onUpdateWord}
+                    onStartEdit={onStartEdit}
+                    className={cx(
+                      "inline-block transition-all duration-150 ease-out origin-bottom",
+                      isCurrent
+                        ? "scale-[1.06] -translate-y-[1px] font-semibold text-accent-deep bg-accent-soft/80 px-0.5 rounded shadow-xs z-10 relative"
+                        : "scale-100",
+                      w && "cursor-pointer hover:text-accent-deep",
+                    )}
+                  />
+                );
+              })}
+            </span>
+          );
+        }
+
+        const pieceWordCount = p.kind === "disputed" ? 1 : Math.max(1, p.edit.original.trim().split(/\s+/).length);
+        const startWIdx = wordCursor;
+        const endWIdx = wordCursor + pieceWordCount;
+        wordCursor += pieceWordCount;
+
+        const isCurrent = activeWordIdx >= startWIdx && activeWordIdx < endWIdx;
+        const pieceStart = words[startWIdx]?.start ?? seg.start;
+        const pieceWord = p.kind === "disputed" ? p.text : p.kind === "accepted" ? p.edit.replacement : p.edit.original;
+
+        return (
+          <EditableWord
+            key={pIdx}
+            word={pieceWord}
+            wordIdx={startWIdx}
+            segId={seg.id}
+            onSeek={() => onSeek(pieceStart)}
+            onSave={onUpdateWord}
+            onStartEdit={onStartEdit}
+            className={cx(
+              "inline-block transition-all duration-150 ease-out origin-bottom",
+              isCurrent
+                ? "scale-[1.06] -translate-y-[1px] font-semibold shadow-xs z-10 relative ring-1 ring-accent/40 rounded px-0.5"
+                : "scale-100",
+              "cursor-pointer",
+            )}
+          >
+            <PieceView p={p} mode={mode} />
+          </EditableWord>
+        );
+      })}
+    </p>
+  );
+}
+
+const Row = memo(function Row({
+  seg,
+  pieces,
+  mode,
+  active,
+  currentTime,
+  isPlaying,
+  onSeek,
+  onUpdateWord,
+  onUpdateSentence,
+  onStartEdit,
+}: {
+  seg: Segment;
+  pieces: Piece[];
+  mode: TranscriptMode;
+  active: boolean;
+  currentTime: number;
+  isPlaying: boolean;
+  onSeek: (t: number) => void;
+  onUpdateWord?: (segmentId: string, wordIdx: number, newWord: string) => void;
+  onUpdateSentence?: (segmentId: string, newSentence: string) => void;
+  onStartEdit?: () => void;
+}) {
+  const [editingSentence, setEditingSentence] = useState(false);
+  const [sentenceDraft, setSentenceDraft] = useState(seg.text);
+
+  useEffect(() => {
+    setSentenceDraft(seg.text);
+  }, [seg.text]);
+
+  const commitSentence = () => {
+    const trimmed = sentenceDraft.trim();
+    if (trimmed && trimmed !== seg.text) {
+      onUpdateSentence?.(seg.id, trimmed);
+    } else {
+      setSentenceDraft(seg.text);
+    }
+    setEditingSentence(false);
+  };
+
   return (
     <div
       className={cx(
-        "grid grid-cols-[3.5rem_1fr] gap-x-3 border-l-2 px-4 py-2.5",
-        active ? "border-accent bg-accent-soft/50" : "border-transparent",
-        dim && "opacity-55",
+        "group grid grid-cols-[3.5rem_1fr] gap-x-3 border-l-2 px-4 py-2.5 transition-all duration-300 ease-out rounded-r-md",
+        active
+          ? "border-accent bg-accent-soft/40 shadow-sm translate-x-1"
+          : "border-transparent hover:bg-raised/40",
       )}
     >
       <button
@@ -117,19 +387,82 @@ const Row = memo(function Row({
         {fmtTime(seg.start)}
         <div className="text-[10px] opacity-70">{seg.id}</div>
       </button>
-      <div>
-        {seg.speaker && <div className="mb-0.5 text-xs font-medium text-ink-2">{seg.speaker}</div>}
-        <p className="text-[15px] leading-relaxed">
-          {pieces.map((p, i) => (
-            <PieceView key={i} p={p} mode={mode} />
-          ))}
-        </p>
-      </div>
+
+      {editingSentence ? (
+        <div className="flex-1">
+          <div className="mb-1 flex items-center justify-between text-xs font-medium text-ink-2">
+            <span>{seg.speaker}</span>
+            <span className="text-[10.5px] text-ink-3">Press Enter to save · Esc to cancel</span>
+          </div>
+          <textarea
+            autoFocus
+            value={sentenceDraft}
+            onChange={(e) => setSentenceDraft(e.target.value)}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                commitSentence();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                setSentenceDraft(seg.text);
+                setEditingSentence(false);
+              }
+            }}
+            onBlur={commitSentence}
+            rows={2}
+            className="w-full text-[15px] leading-relaxed font-medium text-ink bg-surface border-2 border-accent rounded p-2 shadow-xs outline-none ring-2 ring-accent/30 resize-none"
+          />
+        </div>
+      ) : (
+        <div>
+          <div className="mb-0.5 flex items-center justify-between text-xs font-medium text-ink-2">
+            {seg.speaker && <span>{seg.speaker}</span>}
+            <button
+              onClick={() => {
+                onStartEdit?.();
+                setSentenceDraft(seg.text);
+                setEditingSentence(true);
+              }}
+              className="opacity-0 group-hover:opacity-100 hover:text-accent-deep text-[11px] text-ink-3 transition-opacity ml-auto"
+              title="Edit entire sentence"
+            >
+              ✏ Edit line
+            </button>
+          </div>
+          <SegmentContent
+            seg={seg}
+            pieces={pieces}
+            mode={mode}
+            active={active}
+            currentTime={currentTime}
+            isPlaying={isPlaying}
+            onSeek={onSeek}
+            onUpdateWord={onUpdateWord}
+            onStartEdit={onStartEdit}
+          />
+        </div>
+      )}
     </div>
   );
 });
 
-export function TranscriptPane({ raw, accepted, rejected, hasRefinement, mode, onMode, cited, activeId, scrollTo, onSeek }: Props) {
+export function TranscriptPane({
+  raw,
+  accepted,
+  rejected,
+  hasRefinement,
+  mode,
+  onMode,
+  activeId,
+  currentTime = 0,
+  isPlaying = false,
+  scrollTo,
+  onSeek,
+  onUpdateWord,
+  onUpdateSentence,
+  onStartEdit,
+}: Props) {
   const parent = useRef<HTMLDivElement>(null);
   const effectiveMode: TranscriptMode = hasRefinement ? mode : "raw";
 
@@ -155,6 +488,14 @@ export function TranscriptPane({ raw, accepted, rejected, hasRefinement, mode, o
     overscan: 8,
   });
 
+  // Smoothly track and scroll to the currently spoken sentence as audio plays
+  useEffect(() => {
+    if (!isPlaying || !activeId) return;
+    const i = index.get(activeId);
+    if (i == null) return;
+    v.scrollToIndex(i, { align: "center", behavior: "smooth" });
+  }, [activeId, isPlaying, index, v]);
+
   useEffect(() => {
     if (!scrollTo) return;
     const i = index.get(scrollTo.id);
@@ -177,7 +518,12 @@ export function TranscriptPane({ raw, accepted, rejected, hasRefinement, mode, o
   return (
     <section className="flex min-h-0 flex-col max-md:h-[65vh]" aria-label="Transcript">
       <header className="flex items-center justify-between gap-3 border-b border-line px-4 py-2.5">
-        <h2 className="text-xs font-semibold tracking-wider text-ink-3 uppercase">Transcript</h2>
+        <div className="flex items-center gap-2">
+          <h2 className="text-xs font-semibold tracking-wider text-ink-3 uppercase">Transcript</h2>
+          <span className="hidden sm:inline-block rounded bg-raised px-1.5 py-0.5 text-[10.5px] text-ink-3">
+            Double-click word to edit
+          </span>
+        </div>
         <Tabs
           label="Transcript view"
           value={effectiveMode}
@@ -193,7 +539,7 @@ export function TranscriptPane({ raw, accepted, rejected, hasRefinement, mode, o
           }
         />
       </header>
-      <div ref={parent} className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={parent} className="min-h-0 flex-1 overflow-y-auto scroll-smooth">
         <div style={{ height: v.getTotalSize(), position: "relative" }}>
           {v.getVirtualItems().map((item) => {
             const seg = raw[item.index];
@@ -209,9 +555,13 @@ export function TranscriptPane({ raw, accepted, rejected, hasRefinement, mode, o
                   seg={seg}
                   pieces={pieces[item.index]}
                   mode={effectiveMode}
-                  dim={!!cited && !cited.has(seg.id)}
                   active={seg.id === activeId}
+                  currentTime={currentTime}
+                  isPlaying={isPlaying}
                   onSeek={onSeek}
+                  onUpdateWord={onUpdateWord}
+                  onUpdateSentence={onUpdateSentence}
+                  onStartEdit={onStartEdit}
                 />
               </div>
             );

@@ -116,7 +116,7 @@ export function Empty({ children }: { children: ReactNode }) {
 }
 
 /** Wordmark: orange block with a cursor-style T, then the name. */
-export function Brand({ compact }: { compact?: boolean }) {
+export function Brand({ compact: _ }: { compact?: boolean } = {}) {
   return (
     <div className="flex items-center gap-2.5">
       <span className="relative grid size-8 place-items-center bg-accent text-[17px] font-bold text-accent-ink">
@@ -125,7 +125,6 @@ export function Brand({ compact }: { compact?: boolean }) {
       </span>
       <span className="text-[19px] leading-none font-bold tracking-[-0.03em]">
         Trace
-        {!compact && <span className="ml-2 font-mono max-sm:hidden text-[10px] font-normal tracking-[0.16em] text-ink-3">ML · PS</span>}
       </span>
     </div>
   );
