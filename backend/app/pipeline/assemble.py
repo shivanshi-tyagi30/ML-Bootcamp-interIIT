@@ -17,6 +17,56 @@ PAUSE_SEC = 1.0
 MAX_SEC, MAX_WORDS = 30.0, 60
 SOFT_WORDS = 12  # inside a long Whisper segment, end on sentence punctuation after this many words
 SENTENCE_END = re.compile(r"[.!?…]['\"”)]*$")
+# A full stop after these is not the end of a sentence ("Rs. 2,75,000", "Dr. Rao").
+ABBREVIATIONS = {"rs.", "re.", "inr.", "mr.", "mrs.", "ms.", "dr.", "prof.", "st.", "sr.", "jr.", "vs.", "no.",
+                 "approx.", "e.g.", "i.e.", "lt.", "col.", "capt.", "sec.", "dept.", "govt.", "fig.", "pt.", "smt.",
+                 "shri."}
+# Whisper sometimes splits one written token into pieces: "2" ",75" ",000" or "open" "-air".
+NUMBER_PIECE = re.compile(r"^[,.]\d")
+HYPHEN_PIECE = re.compile(r"^-\w")
+
+
+def _glues(prev: str, piece: str) -> bool:
+    """Whether `piece` continues the token `prev` with no space ("2" + ",75", "open" + "-air", "50" + "%")."""
+    prev, piece = prev.strip(), piece.strip()
+    if not prev or not piece:
+        return False
+    return ((NUMBER_PIECE.match(piece) is not None and prev[-1].isdigit())
+            or (HYPHEN_PIECE.match(piece) is not None and prev[-1].isalnum())
+            or (piece[0] == "%" and prev[-1].isdigit()))
+
+
+def merge_pieces(words: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Join split tokens into one word, so the text reads "2,75,000" and each shown word keeps its timing."""
+    out: list[dict[str, Any]] = []
+    for w in words:
+        if out and _glues(out[-1]["w"], w["w"]):
+            p = out[-1]
+            p["w"] = p["w"].rstrip() + w["w"].strip()
+            p["end"] = w["end"]
+            p["conf"] = min(p.get("conf", 1.0), w.get("conf", 1.0))
+            p["disputed"] = bool(p.get("disputed") or w.get("disputed"))
+            continue
+        out.append(dict(w))
+    return out
+
+
+def fill_missing_speakers(words: list[dict[str, Any]]) -> None:
+    """A word between voice turns (a short "80" or "we") takes the speaker of the word next to it."""
+    for i, w in enumerate(words):
+        if w["speaker"] is not None:
+            continue
+        prev = words[i - 1] if i else None
+        nxt = next((x for x in words[i + 1:] if x["speaker"] is not None), None)
+        if prev and prev["speaker"] and w["start"] - prev["end"] <= PAUSE_SEC:
+            w["speaker"] = prev["speaker"]
+        elif nxt and nxt["start"] - w["end"] <= PAUSE_SEC:
+            w["speaker"] = nxt["speaker"]
+
+
+def _sentence_end(word: str) -> bool:
+    """Sentence punctuation that really ends a sentence (not "Rs." or "Dr.")."""
+    return bool(SENTENCE_END.search(word)) and word.strip().lower() not in ABBREVIATIONS
 
 
 def speaker_for(word: dict[str, Any], turns: list[dict[str, Any]]) -> str | None:
@@ -51,6 +101,9 @@ def assemble_segments(
     for i, w in enumerate(words):
         w.update(word_updates.get(str(i), {}))
         w["speaker"] = speaker_for(w, turns)
+    if turns:
+        fill_missing_speakers(words)
+    words = merge_pieces(words)
 
     groups: list[list[dict[str, Any]]] = []
     cur: list[dict[str, Any]] = []
@@ -62,7 +115,7 @@ def assemble_segments(
                 or w["start"] - prev["end"] > PAUSE_SEC
                 or w["end"] - cur[0]["start"] > MAX_SEC
                 or len(cur) >= MAX_WORDS
-                or (SENTENCE_END.search(prev["w"]) and (w.get("seg") != prev.get("seg") or len(cur) >= SOFT_WORDS))
+                or (_sentence_end(prev["w"]) and (w.get("seg") != prev.get("seg") or len(cur) >= SOFT_WORDS))
             )
             if split:
                 groups.append(cur)

@@ -68,9 +68,14 @@ def test_record_keeps_the_configured_thinking_level(monkeypatch):
     assert rec.bodies[0]["reasoning_effort"] == "low"
 
 
-def test_model_without_minimal_thinking_uses_the_configured_level(monkeypatch):
-    rec = Recorder(httpx.Response(400, text="Invalid reasoning_effort value 'minimal'"), reply(json.dumps(GOOD)),
-                   reply(json.dumps(GOOD)))
+@pytest.mark.parametrize("error", [
+    "Invalid reasoning_effort value 'minimal'",
+    # Gemini's own wording (real error from a gemini-3.x flash model).
+    '[{"error": {"code": 400, "message": "Thinking level MINIMAL is not supported for this model. Please retry '
+    'with other thinking level.", "status": "INVALID_ARGUMENT"}}]',
+])
+def test_model_without_minimal_thinking_uses_the_configured_level(monkeypatch, error):
+    rec = Recorder(httpx.Response(400, text=error), reply(json.dumps(GOOD)), reply(json.dumps(GOOD)))
     mock(monkeypatch, rec)
     client = GeminiClient("key")
     run(client)
