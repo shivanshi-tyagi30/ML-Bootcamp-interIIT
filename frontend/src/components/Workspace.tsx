@@ -1,7 +1,8 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, type Api } from "../lib/api";
 import type { TranscriptMode } from "../lib/annotate";
 import { fmtTime } from "../lib/format";
+import { changedWords, renameSpeakerWord, wordAt } from "../lib/renameSpeaker";
 import type { JobError, PartialRecord, Segment } from "../lib/types";
 import { useAudio } from "../lib/useAudio";
 import { DownloadMenu } from "./DownloadMenu";
@@ -36,6 +37,23 @@ export function Workspace({ api, jobId, record: initialRecord, audioUrl, error, 
     setRecord(initialRecord);
   }, [initialRecord]);
 
+  // Hand edits are saved to the server one after another, so a reload and every download include them.
+  const edited = useRef(false);
+  const saving = useRef<Promise<void>>(Promise.resolve());
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "failed">("idle");
+  useEffect(() => {
+    if (!edited.current) return;
+    edited.current = false;
+    const { raw_transcript, refined_transcript, summary, minutes, decisions, open_proposals, action_items } = record;
+    const edits = { raw_transcript, refined_transcript, summary, minutes, decisions, open_proposals, action_items };
+    setSaveState("saving");
+    saving.current = saving.current
+      .then(() => api.saveEdits(jobId, edits))
+      .then(() => setSaveState("saved"))
+      .catch(() => setSaveState("failed"));
+  }, [record, api, jobId]);
+  const flushEdits = useCallback(() => saving.current, []);
+
   const raw = record.raw_transcript ?? [];
   const audio = useAudio(audioUrl, record.meta.duration_s ?? raw.at(-1)?.end ?? 0);
   const [mode, setMode] = useState<TranscriptMode>(record.refinement ? "diff" : "raw");
@@ -54,6 +72,7 @@ export function Workspace({ api, jobId, record: initialRecord, audioUrl, error, 
   const handleUpdateWord = useCallback((segmentId: string, wordIdx: number, newWord: string) => {
     const trimmed = newWord.trim();
     if (!trimmed) return;
+    edited.current = true;
 
     setRecord((prev) => {
       const updateSegList = (list?: Segment[]) => {
@@ -108,17 +127,23 @@ export function Workspace({ api, jobId, record: initialRecord, audioUrl, error, 
         });
       };
 
-      return {
+      const next: PartialRecord = {
         ...prev,
         raw_transcript: updateSegList(prev.raw_transcript),
         refined_transcript: updateSegList(prev.refined_transcript),
       };
+      // Correcting part of a speaker's name ("Kyagi" -> "Tyagi") renames that speaker everywhere.
+      const before = [prev.raw_transcript, prev.refined_transcript].map((l) =>
+        wordAt(l?.find((s) => s.id === segmentId), wordIdx),
+      );
+      return [...new Set(before)].reduce<PartialRecord>((rec, old) => renameSpeakerWord(rec, old, trimmed), next);
     });
   }, []);
 
   const handleUpdateSentence = useCallback((segmentId: string, newSentence: string) => {
     const trimmed = newSentence.trim();
     if (!trimmed) return;
+    edited.current = true;
 
     setRecord((prev) => {
       const updateSegList = (list?: Segment[]) => {
@@ -144,11 +169,16 @@ export function Workspace({ api, jobId, record: initialRecord, audioUrl, error, 
         });
       };
 
-      return {
+      const next: PartialRecord = {
         ...prev,
         raw_transcript: updateSegList(prev.raw_transcript),
         refined_transcript: updateSegList(prev.refined_transcript),
       };
+      const pairs = [prev.raw_transcript, prev.refined_transcript].flatMap((l) => {
+        const seg = l?.find((s) => s.id === segmentId);
+        return seg ? changedWords(seg.text, trimmed) : [];
+      });
+      return pairs.reduce<PartialRecord>((rec, [old, now]) => renameSpeakerWord(rec, old, now), next);
     });
   }, []);
 
@@ -265,7 +295,16 @@ export function Workspace({ api, jobId, record: initialRecord, audioUrl, error, 
             )}
           </div>
         </div>
-        <DownloadMenu api={api} jobId={jobId} record={record} />
+        {saveState !== "idle" && (
+          <span
+            role="status"
+            className={`font-mono text-[11px] ${saveState === "failed" ? "text-bad" : "text-ink-3"}`}
+            title={saveState === "failed" ? "Your edits are on this page but not saved; downloads won't include them." : undefined}
+          >
+            {saveState === "saving" ? "Saving edits…" : saveState === "saved" ? "Edits saved" : "Edits not saved"}
+          </span>
+        )}
+        <DownloadMenu api={api} jobId={jobId} record={record} beforeDownload={flushEdits} />
         <Button variant="ghost" onClick={onTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}>
           {theme === "dark" ? <Icon.sun /> : <Icon.moon />}
         </Button>

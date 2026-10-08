@@ -382,10 +382,11 @@ class GeminiClient:
                                      "finished steps are kept.") from e
             if r.status_code == 400:
                 text = r.text.lower()
-                if "reasoning" in text and body.get("reasoning_effort") == "minimal" and self.minimal_ok:
+                about_effort = "reasoning" in text or "thinking" in text  # Gemini: "Thinking level ... not supported"
+                if about_effort and body.get("reasoning_effort") == "minimal" and self.minimal_ok:
                     self.minimal_ok = False  # model without a "minimal" level: use the configured one
                     continue
-                if "reasoning" in text and self.reasoning_effort:
+                if about_effort and self.reasoning_effort:
                     self.reasoning_effort = ""  # provider without that option
                     continue
                 if not self.schema_in_prompt and ("schema" in text or "response_format" in text):

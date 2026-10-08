@@ -18,9 +18,13 @@ from app.core.errors import PipelineError, user_message
 from app.core.events import TERMINAL
 from app.core.stages import STAGE_MESSAGES, STAGE_OUTPUT, Stage
 from app.core.storage import job_dir, read_json, write_json
-from app.models.api import CreateJobResponse, JobDetail, JobList, JobSummary, PartialResults, RenameRequest
+from app.models.api import (
+    CreateJobResponse, EditsRequest, JobDetail, JobList, JobSummary, PartialResults, RenameRequest,
+)
 from app.models.record import MeetingRecord, Refinement, Segment
-from app.pipeline.runner import dump_event, remember_api_key, rename_record, request_cancel
+from app.pipeline.runner import (
+    EDITED_TRANSCRIPTS, dump_event, remember_api_key, rename_record, request_cancel, save_edits,
+)
 from app.pipeline.validate import extension_of, stream_upload, validate_file
 
 router = APIRouter(prefix="/api", tags=["jobs"])
@@ -124,8 +128,10 @@ async def get_job(job_id: str, state: AppState = Depends(get_state)) -> Any:
         job=JobSummary.from_row(row),
         record=MeetingRecord(**rec) if rec else None,
         partial=PartialResults(
-            raw_transcript=_segments(d / STAGE_OUTPUT[Stage.RAW_SAVED]),
-            refined_transcript=_segments(d / "refined_transcript.json"),
+            raw_transcript=_segments(d / EDITED_TRANSCRIPTS["raw_transcript"])
+            or _segments(d / STAGE_OUTPUT[Stage.RAW_SAVED]),
+            refined_transcript=_segments(d / EDITED_TRANSCRIPTS["refined_transcript"])
+            or _segments(d / "refined_transcript.json"),
             refinement=Refinement(**refinement) if refinement else None,
         ),
         timings=read_json(d / "timings.json") or None,
@@ -190,6 +196,18 @@ async def rename_job(job_id: str, body: RenameRequest, state: AppState = Depends
     await state.db.update(job_id, title=title)
     await asyncio.to_thread(rename_record, state.settings.jobs_dir, job_id, title)
     return JobSummary.from_row(await state.db.get(job_id))  # type: ignore[arg-type]
+
+
+@router.put("/jobs/{job_id}/edits", status_code=204, response_model=None, response_class=Response)
+async def put_edits(job_id: str, body: EditsRequest, state: AppState = Depends(get_state)) -> Any:
+    """Save hand corrections (words, lines, speaker names) so the page and every download show them."""
+    row = await get_job_or_none(state, job_id)
+    if row is None:
+        return error_response("E_NOT_FOUND")
+    if row["status"] in ("queued", "running"):
+        return error_response("E_JOB_RUNNING")
+    await asyncio.to_thread(save_edits, state.settings.jobs_dir, job_id, body.model_dump(mode="json", exclude_none=True))
+    return Response(status_code=204)
 
 
 @router.delete("/jobs/{job_id}", status_code=204, response_model=None, response_class=Response)

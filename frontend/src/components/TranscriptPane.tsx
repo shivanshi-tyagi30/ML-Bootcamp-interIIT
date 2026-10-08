@@ -3,7 +3,7 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { REJECT_REASONS, annotate, type Piece, type TranscriptMode } from "../lib/annotate";
 import { fmtTime } from "../lib/format";
 import type { Edit, RejectedEdit, Segment } from "../lib/types";
-import { Tabs, Tip, cx } from "./ui";
+import { Icon, Tabs, Tip, cx } from "./ui";
 
 interface Props {
   raw: Segment[];
@@ -165,19 +165,30 @@ function EditableWord({
     );
   }
 
+  // Click plays from the word; editing has its own small pencil button that shows on hover, so a click
+  // never starts an edit by accident. Hover popups on edited or disputed words keep working.
   return (
-    <span
-      onClick={() => onSeek?.()}
-      onDoubleClick={(e) => {
-        e.stopPropagation();
-        onStartEdit?.();
-        setDraft(word);
-        setEditing(true);
-      }}
-      title="Click to play · Double-click to edit"
-      className={className}
-    >
-      {children ?? word}
+    <span className="group/word relative inline-block">
+      <span onClick={() => onSeek?.()} title={onSeek ? "Click to play from here" : undefined} className={className}>
+        {children ?? word}
+      </span>
+      {onSave && (
+        <button
+          type="button"
+          aria-label={`Edit "${word}"`}
+          title="Edit this word"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onStartEdit?.();
+            setDraft(word);
+            setEditing(true);
+          }}
+          className="absolute -bottom-2 -right-2 z-20 flex h-4 w-4 items-center justify-center rounded-full border border-ink/20 bg-surface text-ink-2 opacity-0 shadow-xs transition-opacity hover:border-accent hover:text-accent-deep focus:opacity-100 group-hover/word:opacity-100"
+        >
+          <Icon.pencil className="h-2.5 w-2.5" />
+        </button>
+      )}
     </span>
   );
 }
@@ -524,7 +535,7 @@ export function TranscriptPane({
         <div className="flex items-center gap-2">
           <h2 className="text-xs font-semibold tracking-wider text-ink-3 uppercase">Transcript</h2>
           <span className="hidden sm:inline-block rounded bg-raised px-1.5 py-0.5 text-[10.5px] text-ink-3">
-            Double-click word to edit
+            Hover a word, then ✎ to edit
           </span>
         </div>
         <Tabs
