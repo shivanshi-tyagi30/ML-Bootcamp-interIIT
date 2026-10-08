@@ -1,8 +1,0 @@
-# Hosted website (Hugging Face Space, CPU, cloud LM): everything the app uses, nothing it doesn't.
-# PyTorch CPU wheels are installed first by the Dockerfile; Parakeet (NeMo) and pyannote are left out
-# (the app runs without them: low-confidence words are marked instead, speakers use ECAPA).
--r requirements-dev.txt
-faster-whisper>=1.0.3
-silero-vad>=5.1
-speechbrain>=1.0.0
-scikit-learn>=1.3

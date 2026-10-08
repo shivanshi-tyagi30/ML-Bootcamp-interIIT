@@ -9,23 +9,27 @@
   `npm run dev:mock` runs without one.
 - [`docs/api-contract.md`](docs/api-contract.md): what the frontend relies on from the backend.
 
-## Website (free, permanent link): Hugging Face Space
+## Website (free, permanent link): Render
 
-The whole app runs as one website on a free Hugging Face Space (CPU basic: 2 vCPU, 16 GB RAM). Whisper and
-speaker labels run on the Space; each visitor pastes their own free Gemini API key, which writes the minutes.
+The hosted website runs on Render's free plan with no local models, so it fits in 512 MB:
+**Whisper large-v3 on Groq** writes the transcript, **AssemblyAI** tells the speakers apart (only "who spoke
+when"; the words still come from Whisper), and **Gemini** refines it and writes the minutes. All three have free
+tiers without a card. The keys are stored in Render's environment settings, so visitors paste nothing.
 
-1. Sign up at [huggingface.co](https://huggingface.co) (free, no card).
-2. **New Space**: any name (e.g. `trace`), **SDK: Docker**, template **Blank**, hardware **CPU basic (free)**,
-   visibility **Public**.
-3. In the Space, open **Files -> Add file -> Upload files** and upload the two files from
-   [`deploy/huggingface/`](deploy/huggingface/): `Dockerfile` and `README.md` (replace the Space's README).
-4. The Space builds by itself (about 15-20 minutes the first time; watch the **Logs** tab). When it says
-   `all models loaded ... ready`, open `https://<your-username>-<space-name>.hf.space`.
+1. Get three free API keys:
+   - Gemini: [aistudio.google.com](https://aistudio.google.com) -> Get API key
+   - Groq: [console.groq.com](https://console.groq.com) -> API Keys -> Create API key
+   - AssemblyAI: [assemblyai.com](https://www.assemblyai.com) -> Sign up -> copy the API key from the dashboard
+2. Sign in at [render.com](https://render.com) with GitHub.
+3. **New -> Blueprint**, pick this repository. Render reads [`render.yaml`](render.yaml) and asks for the three
+   keys; paste them and click **Apply**.
+4. The first build takes about 5-10 minutes. The link is `https://trace-xxxx.onrender.com`
+   (shown at the top of the service page).
 
-To deploy a newer version after merging to `main`: in the Space, **Settings -> Factory rebuild**.
-Good to know: meetings are kept until the Space restarts (free Spaces have no lasting disk); a Space with no
-visitors for 48 hours goes to sleep and the next visit wakes it up in about a minute; transcription on the
-free CPU takes about 1-2x the recording's length. Everyone with the link sees the same meeting list.
+Every push to `main` deploys again by itself. Good to know: a free service sleeps after 15 minutes without
+visitors (the next visit takes about a minute to wake it), and its files are wiped when it sleeps or redeploys,
+so download the meetings you want to keep. Recordings can be up to 90 minutes. Everyone with the link shares
+the same meeting list and the same free-tier quotas.
 
 ## Run on Google Colab (free GPU, no install)
 

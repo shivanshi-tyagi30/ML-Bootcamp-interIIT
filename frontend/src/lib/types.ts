@@ -164,6 +164,7 @@ export type ErrorCode =
   | "E_LM2_FAILED"
   | "E_RENDER_FAILED"
   | "E_NEEDS_KEY"
+  | "E_SERVER_SETUP"
   | "E_BUSY"
   | "E_NOT_FOUND"
   | "E_JOB_RUNNING"
@@ -224,6 +225,8 @@ export interface Health {
   status: string;
   ffmpeg?: boolean;
   llm?: { backend: string; host: string; reachable: boolean | null; missing: string[]; cloud?: string; key_required?: boolean };
+  /** Server settings that make every upload fail (e.g. a missing cloud speech key). */
+  setup_problems?: string[];
   whisper?: { model: string; device: string; compute_type: string; beam_size: number };
   gpu?: boolean;
 }

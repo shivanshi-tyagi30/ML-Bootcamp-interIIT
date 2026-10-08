@@ -74,9 +74,13 @@ def main() -> int:
     """Fetch everything; return the process exit code."""
     s = get_settings()
     ok = True
-    ok &= _step(f"Whisper {s.whisper_runtime()['model']}", lambda: fetch_whisper(s))
-    ok &= _step("Silero VAD", fetch_silero)
-    if s.DIARIZATION_ENABLED:
+    if s.STT_BACKEND == "whisper":
+        ok &= _step(f"Whisper {s.whisper_runtime()['model']}", lambda: fetch_whisper(s))
+    from app.pipeline.vad import silero_available
+
+    if silero_available():
+        ok &= _step("Silero VAD", fetch_silero)
+    if s.DIARIZATION_ENABLED and s.DIARIZATION_BACKEND != "assemblyai":
         if s.DIARIZATION_BACKEND == "pyannote" or (s.DIARIZATION_BACKEND == "auto" and s.HF_TOKEN):
             ok &= _step("pyannote speaker model", lambda: fetch_pyannote(s))
         else:

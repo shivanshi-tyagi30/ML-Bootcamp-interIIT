@@ -60,6 +60,8 @@ async def create_job(
     s = state.settings
     effective_key = (api_key or request.headers.get("x-gemini-key") or request.headers.get("x-api-key")
                      or getattr(s, "GEMINI_API_KEY", "") or "").strip()
+    if s.setup_problems():  # a server set up without its speech keys: say so instead of failing every job
+        return JSONResponse(status_code=503, content={"code": "E_SERVER_SETUP", "message": " ".join(s.setup_problems())})
     if not effective_key and not s.LOCAL_LLM_ENABLED:
         return error_response("E_NEEDS_KEY")  # before the upload is stored: nothing to clean up
     if state.active_uploads >= s.MAX_CONCURRENT_UPLOADS:

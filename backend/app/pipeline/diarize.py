@@ -184,6 +184,24 @@ async def diarize(ctx: "JobContext") -> None:
             return
 
     backend = getattr(s, "DIARIZATION_BACKEND", "auto").lower()
+    if backend == "assemblyai":
+        from app.pipeline.cloud_speech import AssemblyAIDiarizer
+
+        d = AssemblyAIDiarizer(s)
+        await ctx.progress(0.0, "Telling speakers apart (AssemblyAI)")
+        try:
+            started = (ctx.read("assemblyai.json") or {}).get("id")
+            raw_turns = await asyncio.to_thread(
+                lambda: d.collect(started, ctx.cancel_requested) if started
+                else d.collect(d.submit(ctx.wav_path, s.DIARIZATION_NUM_SPEAKERS), ctx.cancel_requested))
+            ctx.write(out_name, {"skipped": False, "model": d.name, "turns": relabel(raw_turns)})
+        except JobCancelled:
+            raise
+        except Exception as e:  # noqa: BLE001 - this stage never fails the job
+            ctx.log.warning("AssemblyAI speaker labels skipped: %r", e)
+            ctx.write(out_name, {"skipped": True, "reason": str(e)[:200], "turns": []})
+        return
+
     use_pyannote = (backend == "pyannote") or (backend == "auto" and bool(s.HF_TOKEN))
 
     if use_pyannote:
