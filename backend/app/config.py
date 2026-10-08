@@ -55,8 +55,14 @@ class Settings(BaseSettings):
     LLM_BACKEND: Literal["ollama", "vllm"] = "ollama"
     LLM_BASE_URL: str = "http://localhost:11434/v1"
     LM2_BASE_URL: str = ""  # optional: separate server for LM2 (vLLM serves one model per server)
+    # Cloud LLM (one model for LM1 and LM2). Used when a key is set here or pasted in the app.
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash"
+    # Any OpenAI-compatible endpoint works (e.g. https://api.openai.com/v1 with a GPT model).
+    CLOUD_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta/openai"
+    CLOUD_TIMEOUT_SEC: int = 300
+    CLOUD_REASONING_EFFORT: str = "low"  # thinking models: "low" keeps answers fast; "" = provider default
+    CLOUD_FALLBACK_LOCAL: bool = True  # use the local model only when the cloud cannot be reached at all
     LM1_MODEL: str = "qwen3:14b"
     LM2_MODEL: str = "gemma3:27b"
     LLM_TIMEOUT_SEC: int = 600

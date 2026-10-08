@@ -78,7 +78,7 @@ async def build_vocabulary(ctx: "JobContext") -> None:
     glossary = ctx.upload.get("glossary", [])
     raw = ctx.read(ctx.output_name(Stage.RAW_SAVED))
     mode = ctx.settings.VOCAB_PASS
-    one_window = len(raw) <= ctx.settings.LM1_WINDOW_SEGMENTS
+    one_window = len(raw) <= (ctx.lm1_window() if hasattr(ctx, "lm1_window") else ctx.settings.LM1_WINDOW_SEGMENTS)
     if mode == "never" or (mode == "auto" and one_window):
         # The refiner sees the whole meeting in one call, so a separate pass adds a full LLM call for
         # little gain. The user's expected terms and the known-terms lists still apply.

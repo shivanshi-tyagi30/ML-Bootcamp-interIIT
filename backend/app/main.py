@@ -47,6 +47,17 @@ def configure_logging() -> None:
         root.setLevel(logging.INFO)
 
 
+def scrub_stored_keys(settings: Settings) -> None:
+    """Remove API keys that older versions saved in job folders (keys now live in memory only)."""
+    from app.core.stages import STAGE_OUTPUT, Stage
+    from app.core.storage import read_json, write_json
+
+    for f in settings.jobs_dir.glob(f"*/{STAGE_OUTPUT[Stage.VALIDATING]}"):
+        data = read_json(f)
+        if isinstance(data, dict) and data.pop("api_key", None) is not None:
+            write_json(f, data)
+
+
 async def warmup(settings: Settings, services: Services) -> list[str]:
     """Load every model at startup; returns what could not be loaded (each step is best effort)."""
     log = logging.getLogger(__name__)
@@ -74,7 +85,7 @@ async def warmup(settings: Settings, services: Services) -> list[str]:
         except Exception as e:  # noqa: BLE001
             log.warning("warm-up: speaker model not loaded (%r)", e)
             failed.append("speaker model")
-    if services.llm is None:
+    if services.llm is None and not settings.GEMINI_API_KEY:  # a cloud model needs no loading
         client = LLMClient(settings.LLM_BASE_URL, settings.LLM_BACKEND, settings.LLM_TIMEOUT_SEC,
                            keep_alive=settings.OLLAMA_KEEP_ALIVE)
         # One-model-at-a-time mode: only LM1 (used first in every job) is preloaded; LM2 loads when needed.
@@ -106,6 +117,7 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         msg = user_message("E_INTERNAL")  # detail column explains the restart
         for job_id in await db.mark_interrupted("E_INTERNAL", msg):
             logging.getLogger(__name__).warning("server restarted; job marked failed", extra={"job_id": job_id})
+        scrub_stored_keys(settings)
         state.not_loaded = []
         if settings.WARMUP_ON_START:
             t0 = time.perf_counter()
@@ -145,7 +157,9 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
             gpu = False
         loaded = lambda m: bool(m and getattr(m, "loaded", False))  # noqa: E731
         models = list(dict.fromkeys([settings.LM1_MODEL, settings.LM2_MODEL]))
-        if settings.LLM_BACKEND == "ollama":
+        if settings.GEMINI_API_KEY:  # cloud model configured on the server
+            llm = {"reachable": None, "missing": [], "cloud": settings.GEMINI_MODEL}
+        elif settings.LLM_BACKEND == "ollama":
             llm = await ollama_status(settings.ollama_host, models)
         else:
             llm = {"reachable": None, "missing": []}

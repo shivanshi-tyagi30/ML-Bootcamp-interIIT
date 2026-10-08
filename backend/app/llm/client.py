@@ -7,6 +7,7 @@ switch off Qwen3's "thinking" (very slow on CPU) and keep the model loaded betwe
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from pathlib import Path
@@ -218,78 +219,169 @@ async def ollama_status(host: str, models: list[str], timeout: float = 3.0) -> d
     return {"reachable": True, "missing": [m for m in models if m not in have and f"{m}:latest" not in names]}
 
 
+GEMINI_OPENAI_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
+CLOUD_MIN_OUTPUT_TOKENS = 8192  # thinking models spend part of the output budget on reasoning
+
+
+def inline_schema(schema: type[BaseModel]) -> dict[str, Any]:
+    """JSON Schema with $refs inlined and titles/defaults removed: the subset cloud APIs accept."""
+    full = schema.model_json_schema()
+    defs = full.pop("$defs", {})
+
+    def walk(node: Any) -> Any:
+        if isinstance(node, dict):
+            if "$ref" in node:
+                return walk(defs[node["$ref"].split("/")[-1]])
+            return {k: walk(v) for k, v in node.items() if k not in ("title", "default")}
+        if isinstance(node, list):
+            return [walk(x) for x in node]
+        return node
+
+    return walk(full)
+
+
 class GeminiClient:
-    """Fast, accurate cloud LLM using Google Gemini with structured JSON output and Ollama fallback."""
+    """Cloud LLM through an OpenAI-compatible chat API (Google Gemini by default; GPT, Groq etc. by URL).
+
+    - Asks for our exact JSON structure (`response_format: json_schema`). A provider that rejects it gets
+      plain JSON mode with the structure written into the prompt instead.
+    - Leaves room for "thinking" models: the output budget is never below CLOUD_MIN_OUTPUT_TOKENS.
+    - Clear errors for a bad key, rate limits and timeouts; never a silent switch to a slower model.
+    - Falls back to the local model only when the cloud cannot be reached at all (no internet), and says so.
+    """
 
     def __init__(
-        self, api_key: str, model: str = "gemini-2.5-flash", timeout: int = 60,
-        fallback: JSONLLM | None = None,
+        self, api_key: str, model: str = "gemini-2.5-flash", timeout: int = 300,
+        fallback: JSONLLM | None = None, base_url: str = GEMINI_OPENAI_URL, reasoning_effort: str = "low",
     ) -> None:
+        """Create a client for one cloud model (used for both LM1 and LM2)."""
         self.api_key = api_key.strip()
         self.model = model.strip() or "gemini-2.5-flash"
         self.timeout = timeout
         self.fallback = fallback
+        self.base_url = base_url.rstrip("/")
+        self.reasoning_effort = reasoning_effort.strip()
+        self.schema_in_prompt = False  # set after a provider rejects json_schema
+        self.used_fallback = False
+
+    @property
+    def name(self) -> str:
+        """Model label for the record."""
+        return f"{self.model} (cloud)" + (" + local fallback" if self.used_fallback else "")
 
     async def preload(self, model: str) -> bool:
+        """Nothing to load for a cloud model."""
         return True
 
     async def unload(self, model: str) -> None:
-        pass
+        """Nothing to unload for a cloud model."""
+
+    def _body(self, messages: list[dict[str, str]], schema: type[BaseModel], max_tokens: int) -> dict[str, Any]:
+        """Request body for one call."""
+        body: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0.0,
+            "max_tokens": max(max_tokens * 2, CLOUD_MIN_OUTPUT_TOKENS),
+        }
+        if self.schema_in_prompt:
+            body["response_format"] = {"type": "json_object"}
+        else:
+            body["response_format"] = {"type": "json_schema", "json_schema": {
+                "name": schema.__name__, "schema": inline_schema(schema), "strict": False}}
+        if self.reasoning_effort:
+            body["reasoning_effort"] = self.reasoning_effort
+        return body
+
+    async def _post(self, body: dict[str, Any]) -> httpx.Response:
+        """POST with one short wait-and-retry on rate limits and server errors."""
+        url = f"{self.base_url}/chat/completions"
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        for attempt in range(3):
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                r = await client.post(url, headers=headers, json=body)
+            if r.status_code in (429, 500, 502, 503, 504) and attempt < 2:
+                wait = min(float(r.headers.get("retry-after") or 0) or (5.0 * (attempt + 1)), 30.0)
+                log.warning("cloud LLM HTTP %d; retrying in %.0f s", r.status_code, wait)
+                await asyncio.sleep(wait)
+                continue
+            return r
+        return r
+
+    async def _call(self, messages: list[dict[str, str]], schema: type[BaseModel], max_tokens: int) -> str:
+        """One completed call; adapts once to providers that reject json_schema or reasoning_effort."""
+        for _ in range(3):
+            body = self._body(messages if not self.schema_in_prompt else _with_schema(messages, schema),
+                              schema, max_tokens)
+            try:
+                r = await self._post(body)
+            except httpx.TimeoutException as e:
+                raise LLMUnavailable(f"{self.model} took longer than {self.timeout} s.") from e
+            if r.status_code == 400:
+                text = r.text.lower()
+                if "reasoning" in text and self.reasoning_effort:
+                    self.reasoning_effort = ""  # provider without that option
+                    continue
+                if not self.schema_in_prompt and ("schema" in text or "response_format" in text):
+                    self.schema_in_prompt = True
+                    continue
+            if r.status_code in (401, 403):
+                raise LLMUnavailable("The cloud model rejected the API key. Check the key and try again.")
+            if r.status_code == 429:
+                raise LLMUnavailable("The cloud model's free-tier rate limit was reached. Wait a minute and retry.")
+            if r.status_code == 404:
+                raise LLMUnavailable(f"Model '{self.model}' was not found at {self.base_url}. Check GEMINI_MODEL.")
+            if r.status_code >= 400:
+                raise LLMUnavailable(f"Cloud model returned HTTP {r.status_code}: {r.text[:300]}")
+            choice = (r.json().get("choices") or [{}])[0]
+            if choice.get("finish_reason") == "length":
+                log.warning("cloud LLM answer was cut off at max_tokens=%s", body["max_tokens"])
+            return (choice.get("message") or {}).get("content") or ""
+        raise LLMUnavailable("The cloud model rejected the request format.")
 
     async def json_call(
         self, model: str, system: str, user: str, schema: type[T], max_retries: int, max_tokens: int = 4096,
         job_id: str = "-", on_retry: OnRetry | None = None,
     ) -> T:
-        """Call Gemini's OpenAI-compatible endpoint with JSON validation and fallback to local Ollama."""
-        url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
-        req_model = self.model if "gemini" in self.model else "gemini-2.5-flash"
-        body = {
-            "model": req_model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "temperature": 0.0,
-            "response_format": {"type": "json_object"},
-            "max_tokens": max_tokens,
-        }
+        """Return a validated instance of `schema` from the cloud model."""
+        messages: list[dict[str, str]] = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         last_error = ""
         for attempt in range(max_retries + 1):
             t0 = time.perf_counter()
             try:
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    r = await client.post(url, headers=headers, json=body)
-                if r.status_code == 200:
-                    data = r.json()
-                    text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                    log.info("gemini %s attempt=%d latency=%.2fs", req_model, attempt, time.perf_counter() - t0,
-                             extra={"job_id": job_id})
-                    try:
-                        return parse_output(text, schema)
-                    except InvalidModelOutput as e:
-                        last_error = str(e)
-                        log.warning("invalid %s output from gemini: %s", schema.__name__, last_error, extra={"job_id": job_id})
-                        if attempt < max_retries and on_retry:
-                            await on_retry(f"retrying Gemini JSON ({attempt + 2} of {max_retries + 1})")
-                        body["messages"] += [
-                            {"role": "assistant", "content": text[:4000]},
-                            {"role": "user", "content": REPAIR_MESSAGE.format(error=last_error)},
-                        ]
-                else:
-                    err_msg = r.text[:300]
-                    log.warning("gemini returned HTTP %d: %s", r.status_code, err_msg, extra={"job_id": job_id})
-                    if self.fallback:
-                        log.info("falling back to local LLM for %s", schema.__name__, extra={"job_id": job_id})
-                        return await self.fallback.json_call(model, system, user, schema, max_retries, max_tokens, job_id, on_retry)
-                    raise LLMUnavailable(f"Gemini API returned HTTP {r.status_code}: {err_msg}")
-            except Exception as e:
-                log.warning("gemini call failed (%r)", e, extra={"job_id": job_id})
-                if self.fallback:
-                    log.info("falling back to local LLM for %s", schema.__name__, extra={"job_id": job_id})
-                    return await self.fallback.json_call(model, system, user, schema, max_retries, max_tokens, job_id, on_retry)
-                raise LLMUnavailable(f"Gemini API failed: {e}") from e
+                text = await self._call(messages, schema, max_tokens)
+            except httpx.TransportError as e:  # no connection at all: the only case for the local model
+                if self.fallback is None:
+                    raise LLMUnavailable(f"Can't reach the cloud model ({e!r}). Check the internet connection.") from e
+                log.warning("cloud LLM unreachable (%r); using the local model for %s", e, schema.__name__,
+                            extra={"job_id": job_id})
+                self.used_fallback = True
+                if on_retry:
+                    await on_retry("cloud model unreachable, using the local model (slower)")
+                return await self.fallback.json_call(model, system, user, schema, max_retries, max_tokens, job_id,
+                                                     on_retry)
+            log.info("cloud llm %s attempt=%d schema=%s latency=%.1fs", self.model, attempt, schema.__name__,
+                     time.perf_counter() - t0, extra={"job_id": job_id})
+            try:
+                return parse_output(text, schema)
+            except InvalidModelOutput as e:
+                last_error = str(e)
+                log.warning("invalid %s output from %s: %s", schema.__name__, self.model, last_error,
+                            extra={"job_id": job_id})
+                if attempt < max_retries and on_retry:
+                    await on_retry(f"model returned invalid JSON, retrying ({attempt + 2} of {max_retries + 1})")
+                messages = messages + [
+                    {"role": "assistant", "content": text[:4000]},
+                    {"role": "user", "content": REPAIR_MESSAGE.format(error=last_error)},
+                ]
+        raise InvalidModelOutput(f"{self.model} returned invalid JSON {max_retries + 1} times: {last_error}")
 
-        if self.fallback:
-            return await self.fallback.json_call(model, system, user, schema, max_retries, max_tokens, job_id, on_retry)
-        raise InvalidModelOutput(f"Gemini returned invalid JSON {max_retries + 1} times: {last_error}")
+
+def _with_schema(messages: list[dict[str, str]], schema: type[BaseModel]) -> list[dict[str, str]]:
+    """Messages with the JSON structure appended to the last user turn (for plain JSON mode)."""
+    import json
+
+    out = [dict(m) for m in messages]
+    out[-1]["content"] += "\n\nReturn JSON with exactly this structure (JSON Schema):\n" + json.dumps(
+        inline_schema(schema), ensure_ascii=False)
+    return out

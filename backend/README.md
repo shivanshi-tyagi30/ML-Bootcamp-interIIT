@@ -103,6 +103,20 @@ Two laptop profiles:
 (`.env.example`) are both faster and higher quality. Stage times are written to `data/jobs/{id}/timings.json`
 and shown in the workspace header.
 
+## Cloud model (Gemini or any OpenAI-compatible API)
+
+One cloud model can do both LM1 and LM2: much stronger than a laptop model and far faster on CPU-only machines.
+Get a free key at aistudio.google.com, then either `copy .env.gemini .env` and paste it as `GEMINI_API_KEY`, or
+paste it in the app's API key box (it is sent only with uploads, kept in server memory, never written to disk).
+
+- The request asks for the exact record structure (`json_schema`); providers that reject it get JSON mode with
+  the structure in the prompt. The guard, verifier and speaker-name checks still check every edit and item.
+- Bad key, rate limit or timeout give a clear error. The local Ollama model is used only when the cloud cannot be
+  reached at all, and the record then says `(cloud) + local fallback`.
+- `GEMINI_MODEL`, `CLOUD_BASE_URL` (e.g. `https://api.openai.com/v1` for GPT), `CLOUD_REASONING_EFFORT`,
+  `CLOUD_TIMEOUT_SEC`, `CLOUD_FALLBACK_LOCAL` configure it. Free tiers have rate limits, and transcript text is
+  sent to the provider.
+
 ## Deploying (no user ever waits for a model)
 
 1. **At deploy time** run `python -m app.prefetch`. It downloads every model the server will use on that machine

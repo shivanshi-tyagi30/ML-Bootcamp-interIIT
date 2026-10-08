@@ -63,8 +63,8 @@ async def refine(ctx: "JobContext") -> None:
     vocab = ctx.read(ctx.output_name(Stage.VOCABULARY)) or {"domain": "unknown", "terms": []}
     await make_room_for(ctx, ctx.settings.LM1_MODEL)
     system = load_prompt("lm1_refine")
-    wins = windows(len(segs), ctx.settings.LM1_WINDOW_SEGMENTS, ctx.settings.LM1_CONTEXT_SEGMENTS)
-    max_tokens = MAX_EDIT_TOKENS_SHORT if len(segs) <= ctx.settings.LM1_WINDOW_SEGMENTS else MAX_EDIT_TOKENS_FULL
+    wins = windows(len(segs), ctx.lm1_window(), ctx.settings.LM1_CONTEXT_SEGMENTS)
+    max_tokens = MAX_EDIT_TOKENS_SHORT if len(segs) <= ctx.lm1_window() else MAX_EDIT_TOKENS_FULL
     edits: list[dict[str, Any]] = []
     domains: list[str] = []
     for k, win in enumerate(wins):

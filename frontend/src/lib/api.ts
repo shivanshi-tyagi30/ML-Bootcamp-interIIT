@@ -57,13 +57,9 @@ async function readError(res: Response): Promise<JobError> {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
-  const apiKey = typeof window !== "undefined" ? localStorage.getItem("trace_api_key")?.trim() : null;
-  const headers = new Headers(init?.headers);
-  if (apiKey && !headers.has("x-gemini-key")) {
-    headers.set("x-gemini-key", apiKey);
-  }
   try {
-    res = await fetch(`${BASE}${path}`, { ...init, headers });
+    // The cloud API key travels only with uploads (createJob), never with every request.
+    res = await fetch(`${BASE}${path}`, init);
   } catch {
     throw new ApiError(makeError("E_NETWORK"));
   }

@@ -222,7 +222,7 @@ export interface JobState {
 export interface Health {
   status: string;
   ffmpeg?: boolean;
-  llm?: { backend: string; host: string; reachable: boolean | null; missing: string[] };
+  llm?: { backend: string; host: string; reachable: boolean | null; missing: string[]; cloud?: string };
   whisper?: { model: string; device: string; compute_type: string; beam_size: number };
   gpu?: boolean;
 }

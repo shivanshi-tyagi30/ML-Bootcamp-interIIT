@@ -120,15 +120,29 @@ class JobContext:
                 s.LLM_BASE_URL, s.LLM_BACKEND, s.LLM_TIMEOUT_SEC, {s.LM2_MODEL: s.LM2_BASE_URL},
                 max_context=s.LLM_MAX_CONTEXT, keep_alive=s.OLLAMA_KEEP_ALIVE,
             )
-            api_key = (self.upload.get("api_key") or getattr(s, "GEMINI_API_KEY", "") or "").strip()
+            api_key = (JOB_API_KEYS.get(self.job_id) or s.GEMINI_API_KEY or "").strip()
             if api_key:
                 from app.llm.client import GeminiClient
 
-                gemini_model = getattr(s, "GEMINI_MODEL", "gemini-2.5-flash")
-                self._llm = GeminiClient(api_key=api_key, model=gemini_model, fallback=ollama_client)
+                self._llm = GeminiClient(
+                    api_key=api_key, model=s.GEMINI_MODEL, timeout=s.CLOUD_TIMEOUT_SEC,
+                    fallback=ollama_client if s.CLOUD_FALLBACK_LOCAL else None, base_url=s.CLOUD_BASE_URL,
+                    reasoning_effort=s.CLOUD_REASONING_EFFORT,
+                )
             else:
                 self._llm = ollama_client
         return self._llm
+
+    @property
+    def cloud(self) -> bool:
+        """Whether the cloud model handles LM1 and LM2 for this job."""
+        from app.llm.client import GeminiClient
+
+        return isinstance(self.llm, GeminiClient)
+
+    def lm1_window(self) -> int:
+        """Segments per LM1 call: a cloud model reads a whole long meeting at once."""
+        return max(self.settings.LM1_WINDOW_SEGMENTS, CLOUD_LM1_WINDOW) if self.cloud else self.settings.LM1_WINDOW_SEGMENTS
 
     def add_warning(self, code: str) -> None:
         """Record a warning such as W_NON_ENGLISH (shown in events and meta)."""
@@ -218,6 +232,17 @@ assert [s for s, _ in PIPELINE] == PIPELINE_STAGES
 
 # One job on the GPU at a time. Created per event loop (tests use several loops).
 _locks: dict[int, asyncio.Semaphore] = {}
+
+# job_id -> cloud API key pasted in the app for that job. Memory only; never written to disk.
+JOB_API_KEYS: dict[str, str] = {}
+CLOUD_LM1_WINDOW = 400  # ~30-40 minutes of meeting in one refine call on a cloud model
+CLOUD_LM2_INPUT_TOKENS = 200_000  # cloud models read very long transcripts in one call
+
+
+def remember_api_key(job_id: str, key: str) -> None:
+    """Keep a job's cloud API key in memory (also used by Retry while the server runs)."""
+    JOB_API_KEYS[job_id] = key
+
 
 # job_id -> event set when the user cancels; worker threads poll it.
 CANCEL_EVENTS: dict[str, threading.Event] = {}
