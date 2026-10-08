@@ -12,7 +12,7 @@ from app.core.text import estimate_tokens
 from app.llm.client import LLMUnavailable, load_prompt
 from app.llm.json_repair import InvalidModelOutput
 from app.models.llm_io import LM2Output, LM2Record, LM2Topic, SummaryPick
-from app.pipeline.lm1_vocabulary import chunk_lines, transcript_lines
+from app.pipeline.lm1_vocabulary import chunk_lines, make_room_for, transcript_lines
 
 if TYPE_CHECKING:
     from app.pipeline.runner import JobContext
@@ -105,13 +105,15 @@ async def document(ctx: "JobContext") -> None:
     n_segments = len(refined)
     # Without the scratchpad a short meeting's record fits in 4096 tokens; a smaller cap also means a smaller
     # num_ctx, which Ollama allocates and processes faster.
-    lm2_max_tokens = 4096 if n_segments <= 150 and not s.LM2_SCRATCHPAD else 8192
+    if n_segments <= 150:  # up to ~10 minutes: the record (plus scratchpad) fits well inside these caps
+        lm2_max_tokens = 6144 if s.LM2_SCRATCHPAD else 4096
+    else:
+        lm2_max_tokens = 8192
     call = lambda user, schema=record_schema, mt=lm2_max_tokens: ctx.llm.json_call(  # noqa: E731
         s.LM2_MODEL, system, user, schema, s.LLM_MAX_RETRIES, max_tokens=mt, job_id=ctx.job_id,
         on_retry=on_retry,
     )
-    if s.LM1_UNLOAD_BEFORE_LM2 and s.LM1_MODEL != s.LM2_MODEL and hasattr(ctx.llm, "unload"):
-        await ctx.llm.unload(s.LM1_MODEL)  # LM1 is done; don't keep both models in RAM
+    await make_room_for(ctx, s.LM2_MODEL)  # LM1 is done; don't keep both models in RAM
     try:
         budget = s.LM2_MAX_INPUT_TOKENS - estimate_tokens(system) - 2000
         if estimate_tokens("\n".join(lines)) <= budget:

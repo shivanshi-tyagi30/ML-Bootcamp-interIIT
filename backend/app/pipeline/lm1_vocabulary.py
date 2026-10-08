@@ -60,6 +60,18 @@ def merge_vocabularies(parts: list[Vocabulary], glossary: list[str]) -> dict[str
     return {"domain": domain, "terms": [t.model_dump() for t in list(merged.values())[:60 + len(glossary)]]}
 
 
+async def make_room_for(ctx: "JobContext", model: str) -> None:
+    """One-model-at-a-time mode (LM1_UNLOAD_BEFORE_LM2): free the other LLM before `model` runs.
+
+    On a 16 GB laptop qwen3:8b and gemma3:12b do not fit in memory together; holding both makes the
+    system swap to disk, which is far slower than reloading one model.
+    """
+    s = ctx.settings
+    other = s.LM2_MODEL if model == s.LM1_MODEL else s.LM1_MODEL
+    if s.LM1_UNLOAD_BEFORE_LM2 and other != model and hasattr(ctx.llm, "unload"):
+        await ctx.llm.unload(other)
+
+
 async def build_vocabulary(ctx: "JobContext") -> None:
     """Stage function: write 06_vocabulary.json; any failure yields an empty vocabulary."""
     out_name = ctx.output_name(Stage.VOCABULARY)
@@ -74,6 +86,7 @@ async def build_vocabulary(ctx: "JobContext") -> None:
         ctx.log.info("vocabulary pass skipped (short meeting, one refine window)")
         ctx.write(out_name, vocab)
         return
+    await make_room_for(ctx, ctx.settings.LM1_MODEL)
     try:
         chunks = chunk_lines(transcript_lines(raw), CHUNK_TOKENS)
         system = load_prompt("lm1_vocabulary")

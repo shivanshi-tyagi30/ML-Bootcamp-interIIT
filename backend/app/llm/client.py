@@ -23,7 +23,7 @@ T = TypeVar("T", bound=BaseModel)
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 OnRetry = Callable[[str], Awaitable[None]]
-CONTEXT_BUCKETS = (8192, 16384, 32768, 65536, 131072)
+CONTEXT_BUCKETS = (8192, 12288, 16384, 32768, 65536, 131072)
 
 
 def load_prompt(name: str) -> str:
