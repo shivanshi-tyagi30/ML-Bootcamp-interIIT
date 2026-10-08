@@ -271,6 +271,7 @@ class GeminiClient:
         self.timeout = timeout
         self.reasoning_effort = reasoning_effort.strip()
         self.schema_in_prompt = False  # set after a provider rejects json_schema
+        self.minimal_ok = True  # cleared after a provider rejects reasoning_effort="minimal"
         self._available: list[str] = []
         self._tried: set[str] = set()
 
@@ -299,9 +300,17 @@ class GeminiClient:
         else:
             body["response_format"] = {"type": "json_schema", "json_schema": {
                 "name": schema.__name__, "schema": inline_schema(schema), "strict": False}}
-        if self.reasoning_effort:
-            body["reasoning_effort"] = self.reasoning_effort
+        effort = self._effort(schema)
+        if effort:
+            body["reasoning_effort"] = effort
         return body
+
+    def _effort(self, schema: type[BaseModel]) -> str:
+        """Thinking level for one call: "minimal" for the simple, code-checked steps (terminology edits,
+        vocabulary), the configured level for the record."""
+        if self.reasoning_effort and self.minimal_ok and schema.__name__ in LIGHT_SCHEMAS:
+            return "minimal"
+        return self.reasoning_effort
 
     def _timeout_for(self, body: dict[str, Any]) -> float:
         """Seconds to wait for one answer: enough for the input size, so a stalled request is given up on
@@ -373,6 +382,9 @@ class GeminiClient:
                                      "finished steps are kept.") from e
             if r.status_code == 400:
                 text = r.text.lower()
+                if "reasoning" in text and body.get("reasoning_effort") == "minimal" and self.minimal_ok:
+                    self.minimal_ok = False  # model without a "minimal" level: use the configured one
+                    continue
                 if "reasoning" in text and self.reasoning_effort:
                     self.reasoning_effort = ""  # provider without that option
                     continue
@@ -401,7 +413,13 @@ class GeminiClient:
                                      "Set GEMINI_MODEL to one of them.")
             if r.status_code >= 400:
                 raise LLMUnavailable(f"Cloud model returned HTTP {r.status_code}: {r.text[:300]}")
-            choice = (r.json().get("choices") or [{}])[0]
+            data = r.json()
+            usage = data.get("usage") or {}
+            log.info("cloud llm %s %s: %s input, %s output tokens (%s thinking), effort=%s", self.model,
+                     schema.__name__, usage.get("prompt_tokens"), usage.get("completion_tokens"),
+                     (usage.get("completion_tokens_details") or {}).get("reasoning_tokens", "?"),
+                     body.get("reasoning_effort", "default"))
+            choice = (data.get("choices") or [{}])[0]
             if choice.get("finish_reason") == "length":
                 log.warning("cloud LLM answer was cut off at max_tokens=%s", body["max_tokens"])
             return (choice.get("message") or {}).get("content") or ""
@@ -438,6 +456,7 @@ class GeminiClient:
         raise InvalidModelOutput(f"{self.model} returned invalid JSON {max_retries + 1} times: {last_error}")
 
 
+LIGHT_SCHEMAS = {"LM1Output", "Vocabulary"}  # steps whose every output is re-checked by code
 BUSY = (429, 500, 502, 503, 504)
 CLOUD_BUSY_RETRIES = 1  # one short wait, then another model (a busy model often stays busy for minutes)
 CLOUD_BUSY_WAIT = 2.0

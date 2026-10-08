@@ -57,8 +57,25 @@ def test_asks_for_our_exact_json_structure_and_leaves_room_for_thinking(monkeypa
     body = rec.bodies[0]
     fmt = body["response_format"]
     assert fmt["type"] == "json_schema" and "$ref" not in json.dumps(fmt) and "$defs" not in json.dumps(fmt)
-    assert body["max_tokens"] >= 8192 and body["reasoning_effort"] == "low"
+    assert body["max_tokens"] >= 8192 and body["reasoning_effort"] == "minimal"  # a code-checked step
     assert body["model"] == "gemini-2.5-flash"
+
+
+def test_record_keeps_the_configured_thinking_level(monkeypatch):
+    rec = Recorder(reply(json.dumps({"summary": []})))
+    mock(monkeypatch, rec)
+    run(GeminiClient("key"), schema=LM2Output)
+    assert rec.bodies[0]["reasoning_effort"] == "low"
+
+
+def test_model_without_minimal_thinking_uses_the_configured_level(monkeypatch):
+    rec = Recorder(httpx.Response(400, text="Invalid reasoning_effort value 'minimal'"), reply(json.dumps(GOOD)),
+                   reply(json.dumps(GOOD)))
+    mock(monkeypatch, rec)
+    client = GeminiClient("key")
+    run(client)
+    run(client)
+    assert [b["reasoning_effort"] for b in rec.bodies] == ["minimal", "low", "low"]
 
 
 def test_full_record_schema_is_inlined_for_the_provider():

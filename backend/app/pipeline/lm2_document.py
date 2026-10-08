@@ -106,8 +106,10 @@ async def document(ctx: "JobContext") -> None:
     lines = transcript_lines(refined, with_speaker=True)
     candidates = find_candidates([Segment(**x) for x in refined])
     system = load_prompt("lm2_document")
-    record_schema = LM2Output if s.LM2_SCRATCHPAD else LM2Record
-    if not s.LM2_SCRATCHPAD:
+    # A cloud model thinks before it answers; a written scratchpad on top only doubles the output it writes.
+    scratchpad = s.LM2_SCRATCHPAD and not ctx.cloud
+    record_schema = LM2Output if scratchpad else LM2Record
+    if not scratchpad:
         system += NO_SCRATCHPAD_NOTE
 
     async def on_retry(msg: str) -> None:
@@ -117,7 +119,7 @@ async def document(ctx: "JobContext") -> None:
     # Without the scratchpad a short meeting's record fits in 4096 tokens; a smaller cap also means a smaller
     # num_ctx, which Ollama allocates and processes faster.
     if n_segments <= 150:  # up to ~10 minutes: the record (plus scratchpad) fits well inside these caps
-        lm2_max_tokens = 6144 if s.LM2_SCRATCHPAD else 4096
+        lm2_max_tokens = 6144 if scratchpad else 4096
     else:
         lm2_max_tokens = 8192
     call = lambda user, schema=record_schema, mt=lm2_max_tokens: ctx.llm.json_call(  # noqa: E731
