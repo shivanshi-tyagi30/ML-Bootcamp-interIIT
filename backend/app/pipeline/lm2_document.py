@@ -105,12 +105,14 @@ async def document(ctx: "JobContext") -> None:
     refined = ctx.read("refined_transcript.json")
     lines = transcript_lines(refined, with_speaker=True)
     candidates = find_candidates([Segment(**x) for x in refined])
-    system = load_prompt("lm2_document")
-    # A cloud model thinks before it answers; a written scratchpad on top only doubles the output it writes.
+    # A cloud model gets the full minute-taking brief and thinks before it answers (no written scratchpad,
+    # which would only double its output). Small local models keep the short prompt with its procedure.
     scratchpad = s.LM2_SCRATCHPAD and not ctx.cloud
     record_schema = LM2Output if scratchpad else LM2Record
-    if not scratchpad:
-        system += NO_SCRATCHPAD_NOTE
+    if ctx.cloud:
+        system = load_prompt("lm2_document_cloud")
+    else:
+        system = load_prompt("lm2_document") + ("" if scratchpad else NO_SCRATCHPAD_NOTE)
 
     async def on_retry(msg: str) -> None:
         await ctx.progress(0.5, f"Writing the meeting record: {msg}")
