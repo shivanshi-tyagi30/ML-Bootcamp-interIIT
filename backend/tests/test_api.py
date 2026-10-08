@@ -83,6 +83,11 @@ def test_full_lifecycle(client, fixtures_dir):
         forced = client.post("/api/jobs?force=true", files={"file": ("tone.wav", f)})
     assert forced.status_code == 202 and forced.json()["job_id"] != job_id
     wait_done(client, forced.json()["job_id"])
+    # A result made by the local model is not reused for an upload with a cloud key.
+    with open(fixtures_dir / "tone.wav", "rb") as f:
+        keyed = client.post("/api/jobs", files={"file": ("tone.wav", f)}, data={"api_key": "k"})
+    assert keyed.status_code == 202 and keyed.json()["cached"] is False
+    wait_done(client, keyed.json()["job_id"])
 
     # Rename updates the row, the record and the download name.
     r = client.patch(f"/api/jobs/{job_id}", json={"title": "Renamed meeting"})
@@ -112,7 +117,7 @@ def test_full_lifecycle(client, fixtures_dir):
     # Delete removes the row and the folder.
     assert client.delete(f"/api/jobs/{job_id}").status_code == 204
     assert client.get(f"/api/jobs/{job_id}").status_code == 404
-    assert client.get("/api/jobs").json()["total"] == 1
+    assert client.get("/api/jobs").json()["total"] == 2  # the forced and the keyed upload remain
 
 
 def test_bad_job_id(client):

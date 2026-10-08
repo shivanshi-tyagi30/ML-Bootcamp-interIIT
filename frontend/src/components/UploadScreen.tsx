@@ -216,6 +216,11 @@ export function UploadScreen({ error, busy, mock, theme, onTheme, api, onStart, 
                   </div>
                 </div>
               )}
+              <p className="mt-1.5 font-mono text-[10px] text-ink-3">
+                {apiKey
+                  ? "Minutes are written by Gemini (cloud). The local model is not used."
+                  : "No key: minutes are written by the local model on this computer (much slower)."}
+              </p>
             </div>
 
             <div className="flex items-center justify-between gap-3 border-t border-ink px-3 py-3">

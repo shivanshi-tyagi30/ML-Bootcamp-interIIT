@@ -286,7 +286,7 @@ def build_meta(ctx: "JobContext") -> Meta:
     diar = ctx.read(ctx.output_name(Stage.DIARIZING)) or {}
     probe = ctx.read(ctx.output_name(Stage.NORMALIZING)) or {}
     s = ctx.settings
-    # The cloud model (and whether the local fallback had to step in) is what the record should name.
+    # With a key, the cloud model did LM1 and LM2: the record names it.
     llm = getattr(ctx, "_llm", None)
     from app.llm.client import GeminiClient
 

@@ -1,4 +1,4 @@
-"""Cloud LLM client (Gemini / OpenAI-compatible): request shape, failure handling, fallback, key handling."""
+"""Cloud LLM client (Gemini / OpenAI-compatible): request shape, failure handling, busy models, key handling."""
 
 from __future__ import annotations
 
@@ -37,15 +37,6 @@ class Recorder:
         return r
 
 
-class FakeLocal:
-    def __init__(self):
-        self.calls = 0
-
-    async def json_call(self, model, system, user, schema, *a, **kw):
-        self.calls += 1
-        return schema(**GOOD)
-
-
 def run(client, schema=Vocabulary, max_tokens=1024):
     return asyncio.run(client.json_call("lm", "sys", "user", schema, 1, max_tokens=max_tokens))
 
@@ -77,12 +68,10 @@ def test_provider_rejecting_json_schema_gets_the_structure_in_the_prompt(monkeyp
     assert "exactly this structure" in rec.bodies[1]["messages"][-1]["content"]
 
 
-def test_bad_key_is_a_clear_error_and_never_falls_back(monkeypatch):
+def test_bad_key_is_a_clear_error(monkeypatch):
     mock(monkeypatch, Recorder(httpx.Response(401, text="API key not valid")))
-    local = FakeLocal()
     with pytest.raises(LLMUnavailable, match="API key"):
-        run(GeminiClient("bad", fallback=local))
-    assert local.calls == 0
+        run(GeminiClient("bad"))
 
 
 def test_rate_limit_waits_then_succeeds(monkeypatch):
@@ -96,26 +85,22 @@ async def _noop():
     return None
 
 
-def test_no_internet_uses_the_local_model_once_and_says_so(monkeypatch):
+def test_no_internet_is_a_clear_error_never_the_local_model(monkeypatch):
     mock(monkeypatch, Recorder(httpx.ConnectError("no route")))
-    local = FakeLocal()
-    client = GeminiClient("key", fallback=local)
-    assert run(client).domain == "ml"
-    assert local.calls == 1 and client.used_fallback and "local fallback" in client.name
+    with pytest.raises(LLMUnavailable, match="internet.*Retry"):
+        run(GeminiClient("key"))
 
 
-def test_cut_off_or_invalid_answer_is_retried_not_sent_to_the_local_model(monkeypatch):
+def test_cut_off_or_invalid_answer_is_retried(monkeypatch):
     rec = Recorder(reply('{"domain": "ml", "ter', finish="length"), reply(json.dumps(GOOD)))
     mock(monkeypatch, rec)
-    local = FakeLocal()
-    assert run(GeminiClient("key", fallback=local)).domain == "ml"
-    assert local.calls == 0 and len(rec.bodies) == 2
+    assert run(GeminiClient("key")).domain == "ml" and len(rec.bodies) == 2
 
 
 def test_invalid_twice_raises(monkeypatch):
     mock(monkeypatch, Recorder(reply("not json"), reply("still not json")))
     with pytest.raises(InvalidModelOutput):
-        run(GeminiClient("key", fallback=FakeLocal()))
+        run(GeminiClient("key"))
 
 
 def test_api_key_is_never_written_to_disk(settings, fixtures_dir):
@@ -229,11 +214,10 @@ def test_overloaded_model_switches_to_another_cloud_model_not_the_local_one(monk
         return reply(json.dumps(GOOD))
 
     mock(monkeypatch, handler)
-    local = FakeLocal()
-    client = GeminiClient("key", "gemini-2.5-flash", fallback=local)
+    client = GeminiClient("key", "gemini-2.5-flash")
     assert run(client).domain == "ml"
     assert seen == ["gemini-2.5-flash"] * 4 + ["gemini-2.0-flash"]
-    assert client.model == "gemini-2.0-flash" and local.calls == 0 and "fallback" not in client.name
+    assert client.model == "gemini-2.0-flash" and client.name == "gemini-2.0-flash (cloud)"
 
 
 def test_every_model_overloaded_is_a_clear_retry_message(monkeypatch):

@@ -251,12 +251,12 @@ class GeminiClient:
       plain JSON mode with the structure written into the prompt instead.
     - Leaves room for "thinking" models: the output budget is never below CLOUD_MIN_OUTPUT_TOKENS.
     - Clear errors for a bad key, rate limits and timeouts; never a silent switch to a slower model.
-    - Falls back to the local model only when the cloud cannot be reached at all (no internet), and says so.
+    - With a key the cloud model is the only model: no internet is a clear error, never the slow local model.
     """
 
     def __init__(
         self, api_key: str, model: str = "gemini-2.5-flash", timeout: int = 300,
-        fallback: JSONLLM | None = None, base_url: str = GEMINI_OPENAI_URL, reasoning_effort: str = "low",
+        base_url: str = GEMINI_OPENAI_URL, reasoning_effort: str = "low",
     ) -> None:
         """Create a client for one cloud model (used for both LM1 and LM2)."""
         self.api_key = api_key.strip()
@@ -265,17 +265,15 @@ class GeminiClient:
         # A retired model replaced once is replaced for every later job too (no repeated 404s).
         self.model = RESOLVED_MODELS.get((self.base_url, self.requested), self.requested)
         self.timeout = timeout
-        self.fallback = fallback
         self.reasoning_effort = reasoning_effort.strip()
         self.schema_in_prompt = False  # set after a provider rejects json_schema
         self._available: list[str] = []
         self._tried: set[str] = set()
-        self.used_fallback = False
 
     @property
     def name(self) -> str:
         """Model label for the record."""
-        return f"{self.model} (cloud)" + (" + local fallback" if self.used_fallback else "")
+        return f"{self.model} (cloud)"
 
     async def preload(self, model: str) -> bool:
         """Nothing to load for a cloud model."""
@@ -397,16 +395,9 @@ class GeminiClient:
             t0 = time.perf_counter()
             try:
                 text = await self._call(messages, schema, max_tokens)
-            except httpx.TransportError as e:  # no connection at all: the only case for the local model
-                if self.fallback is None:
-                    raise LLMUnavailable(f"Can't reach the cloud model ({e!r}). Check the internet connection.") from e
-                log.warning("cloud LLM unreachable (%r); using the local model for %s", e, schema.__name__,
-                            extra={"job_id": job_id})
-                self.used_fallback = True
-                if on_retry:
-                    await on_retry("cloud model unreachable, using the local model (slower)")
-                return await self.fallback.json_call(model, system, user, schema, max_retries, max_tokens, job_id,
-                                                     on_retry)
+            except httpx.TransportError as e:  # a key means cloud only: never a silent switch to the local model
+                raise LLMUnavailable("Can't reach the cloud model. Check the internet connection and press Retry: "
+                                     "finished steps are kept.") from e
             log.info("cloud llm %s attempt=%d schema=%s latency=%.1fs", self.model, attempt, schema.__name__,
                      time.perf_counter() - t0, extra={"job_id": job_id})
             try:
