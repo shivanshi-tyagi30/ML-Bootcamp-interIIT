@@ -62,22 +62,25 @@ async def warmup(settings: Settings, services: Services) -> list[str]:
     """Load every model at startup; returns what could not be loaded (each step is best effort)."""
     log = logging.getLogger(__name__)
     failed: list[str] = []
-    try:
-        from app.pipeline.vad import silero_regions
-        import numpy as np
+    from app.pipeline.vad import silero_available
 
-        await asyncio.to_thread(silero_regions, np.zeros(16000, dtype=np.float32), 16000)
-    except Exception as e:  # noqa: BLE001
-        log.warning("warm-up: Silero VAD not loaded (%r)", e)
-        failed.append("Silero VAD")
-    if services.stt is None:
+    if silero_available():  # optional: the hosted website uses the energy gate only
+        try:
+            from app.pipeline.vad import silero_regions
+            import numpy as np
+
+            await asyncio.to_thread(silero_regions, np.zeros(16000, dtype=np.float32), 16000)
+        except Exception as e:  # noqa: BLE001
+            log.warning("warm-up: Silero VAD not loaded (%r)", e)
+            failed.append("Silero VAD")
+    if services.stt is None and settings.STT_BACKEND == "whisper":
         try:
             await asyncio.to_thread(stt_whisper.default_stt(settings)._load)
             log.info("warm-up: Whisper loaded")
         except Exception as e:  # noqa: BLE001
             log.warning("warm-up: Whisper not loaded (%r)", e)
             failed.append("Whisper")
-    if services.diarizer is None and settings.DIARIZATION_ENABLED and settings.DIARIZATION_BACKEND != "pyannote":
+    if services.diarizer is None and settings.DIARIZATION_ENABLED and settings.DIARIZATION_BACKEND in ("auto", "ecapa"):
         try:
             d = diarize.default_ecapa_diarizer(settings)
             await asyncio.to_thread(d.identifier._load)
@@ -172,7 +175,10 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
             "not_loaded": state.not_loaded,
             "ffmpeg": bool(shutil.which("ffmpeg") and shutil.which("ffprobe")),
             "llm": {"backend": settings.LLM_BACKEND, "host": settings.ollama_host, **llm},
-            "whisper": {k: rt[k] for k in ("model", "device", "compute_type", "beam_size")},
+            "whisper": ({"model": settings.GROQ_STT_MODEL, "device": "Groq cloud", "compute_type": "-", "beam_size": 1}
+                        if settings.STT_BACKEND == "groq"
+                        else {k: rt[k] for k in ("model", "device", "compute_type", "beam_size")}),
+            "setup_problems": settings.setup_problems(),
             "models": {
                 "stt": loaded(services.stt or stt_whisper._default),
                 "stt_check": loaded(services.recheck_asr or recheck._default),

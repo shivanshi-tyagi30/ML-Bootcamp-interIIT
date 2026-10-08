@@ -16,6 +16,7 @@ export const ERROR_MESSAGES: Record<ErrorCode, string> = {
   E_RENDER_FAILED: "The record was created but the downloads could not be generated.",
   E_NEEDS_KEY:
     "This website writes the minutes with Gemini. Paste your free Gemini API key (aistudio.google.com → Get API key) in the API key box, then upload again.",
+  E_SERVER_SETUP: "This website isn't fully set up yet (a speech service key is missing on the server).",
   E_BUSY: "The server is busy with other uploads. Please try again in a moment.",
   E_NOT_FOUND: "This meeting could not be found.",
   E_JOB_RUNNING: "This meeting is still being processed. Try again when it has finished.",

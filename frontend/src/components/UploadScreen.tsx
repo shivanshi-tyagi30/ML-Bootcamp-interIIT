@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ACCEPTED_EXTENSIONS, MAX_UPLOAD_MB, precheckFile } from "../lib/errors";
 import type { Api } from "../lib/api";
 import type { JobError } from "../lib/types";
@@ -38,6 +38,12 @@ function Promise_({ label, value }: { label: string; value: string }) {
 export function UploadScreen({ error, busy, mock, theme, onTheme, api, onStart, onOpenJob, onSample, onClearError }: Props) {
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
+  // Which model writes the minutes when no key is pasted: the server's own Gemini key, none, or a local model.
+  const [serverLlm, setServerLlm] = useState<"cloud" | "key_required" | "local">("local");
+  useEffect(() => {
+    if (mock) return;
+    api.health().then((h) => setServerLlm(h?.llm?.cloud ? "cloud" : h?.llm?.key_required ? "key_required" : "local")).catch(() => {});
+  }, [api, mock]);
   const [apiKey, setApiKey] = useState(() => (typeof window !== "undefined" ? localStorage.getItem("trace_api_key") || "" : ""));
   const [showKeyInput, setShowKeyInput] = useState(false);
   const [drag, setDrag] = useState(false);
@@ -219,7 +225,11 @@ export function UploadScreen({ error, busy, mock, theme, onTheme, api, onStart, 
               <p className="mt-1.5 font-mono text-[10px] text-ink-3">
                 {apiKey
                   ? "Minutes are written by Gemini (cloud). The local model is not used."
-                  : "No key: minutes are written by the local model on this computer (much slower)."}
+                  : serverLlm === "cloud"
+                    ? "Minutes are written by Gemini with this website's key. You can paste your own key instead."
+                    : serverLlm === "key_required"
+                      ? "Paste your free Gemini API key to process recordings."
+                      : "No key: minutes are written by the local model on this computer (much slower)."}
               </p>
             </div>
 

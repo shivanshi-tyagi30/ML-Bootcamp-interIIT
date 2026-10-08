@@ -56,6 +56,38 @@ def energy_regions(samples: np.ndarray, sr: int) -> list[dict[str, float]]:
     return regions
 
 
+def energy_regions_file(path: Path) -> list[dict[str, float]]:
+    """energy_regions() reading the WAV in blocks: memory stays small even for a two-hour recording."""
+    import soundfile as sf
+
+    with sf.SoundFile(str(path)) as f:
+        sr = f.samplerate
+        n = int(sr * FRAME_SEC)
+        loud: list[bool] = []
+        for block in f.blocks(blocksize=n * 2000, dtype="float32", always_2d=True):
+            mono = block.mean(axis=1)
+            frames = mono[: len(mono) // n * n].reshape(-1, n)
+            loud.extend((np.sqrt((frames**2).mean(axis=1)) > ENERGY_FLOOR).tolist())
+    regions: list[dict[str, float]] = []
+    start = None
+    for i, on in enumerate(loud):
+        if on and start is None:
+            start = i
+        elif not on and start is not None:
+            regions.append({"start": start * FRAME_SEC, "end": i * FRAME_SEC})
+            start = None
+    if start is not None:
+        regions.append({"start": start * FRAME_SEC, "end": len(loud) * FRAME_SEC})
+    return regions
+
+
+def silero_available() -> bool:
+    """Whether Silero VAD (and PyTorch) are installed; the hosted website runs without them."""
+    import importlib.util
+
+    return importlib.util.find_spec("silero_vad") is not None and importlib.util.find_spec("torch") is not None
+
+
 def silero_regions(samples: np.ndarray, sr: int) -> list[dict[str, float]]:
     """Silero VAD speech timestamps in seconds (threshold 0.5, 250 ms speech, 500 ms silence)."""
     global _silero
@@ -73,17 +105,20 @@ def silero_regions(samples: np.ndarray, sr: int) -> list[dict[str, float]]:
 
 def detect_speech(wav: Path, settings: Settings, vad_fn: SpeechFn | None = None) -> dict[str, Any]:
     """Speech regions and total seconds; raises E_NO_SPEECH below MIN_SPEECH_SEC."""
-    samples, sr = load_wav(wav)
     total = lambda rs: round(sum(r["end"] - r["start"] for r in rs), 3)  # noqa: E731
-    loud = energy_regions(samples, sr)
+    loud = energy_regions_file(wav)
     if total(loud) < settings.MIN_SPEECH_SEC:
         raise PipelineError("E_NO_SPEECH", Stage.SPEECH_CHECK, f"energy {total(loud)}s")
     method = "silero"
-    try:
-        regions = (vad_fn or silero_regions)(samples, sr)
-    except ImportError:
-        log.warning("silero-vad unavailable; using the energy gate only")
+    if vad_fn is None and not silero_available():  # no full copy of the audio in memory
         regions, method = loud, "energy"
+    else:
+        samples, sr = load_wav(wav)
+        try:
+            regions = (vad_fn or silero_regions)(samples, sr)
+        except ImportError:
+            log.warning("silero-vad unavailable; using the energy gate only")
+            regions, method = loud, "energy"
     speech = total(regions)
     if speech < settings.MIN_SPEECH_SEC:
         raise PipelineError("E_NO_SPEECH", Stage.SPEECH_CHECK, f"{method} {speech}s")

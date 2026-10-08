@@ -22,6 +22,7 @@ export function SetupCheck({ api }: { api: Api }) {
   const problems: { text: string; fix?: string }[] = [];
   if (h === null) problems.push({ text: "The backend isn't running.", fix: "uvicorn app.main:app --port 8000" });
   else {
+    for (const p of h.setup_problems ?? []) problems.push({ text: p });
     if (h.ffmpeg === false) problems.push({ text: "ffmpeg isn't installed, so audio can't be converted.", fix: "winget install Gyan.FFmpeg" });
     // With a cloud API key (saved in this browser or configured on the server) Ollama is not needed.
     let cloudKey = false;
