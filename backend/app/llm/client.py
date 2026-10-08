@@ -402,12 +402,15 @@ class GeminiClient:
             if r.status_code in (401, 403):
                 raise LLMUnavailable("The cloud model rejected the API key. Check the key and try again.")
             if r.status_code == 429:
-                wait_sec = min(float(r.headers.get("retry-after") or 4.0), 10.0)
-                if attempt < 2:
+                wait_sec = min(float(r.headers.get("retry-after") or 6.0), 15.0)
+                if attempt < 4:
+                    if notify:
+                        await notify(f"Rate limited by Google, waiting {int(wait_sec)}s...")
                     log.warning("cloud LLM rate limited (429); waiting %.1fs", wait_sec)
                     await asyncio.sleep(wait_sec)
                     continue
-                raise LLMUnavailable("The cloud model's free-tier rate limit was reached (15 RPM). Please wait a moment and press Retry.")
+                detail = r.json().get("error", {}).get("message", r.text[:200]) if r.text.startswith("{") else r.text[:200]
+                raise LLMUnavailable(f"Google Gemini rate limit reached: {detail}. Please try again with a fresh key from aistudio.google.com.")
             if r.status_code in BUSY and await self._switch(f"is busy (HTTP {r.status_code})", notify):
                 continue
             if r.status_code in BUSY:
