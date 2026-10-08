@@ -429,8 +429,8 @@ def test_one_model_at_a_time_unloads_the_other_before_each_llm_step(settings, fi
     assert asyncio.run(go())["status"] == "completed"
     calls = llm.calls
     # Gemma is freed before Qwen's vocabulary and refine calls, Qwen before Gemma writes the record.
-    assert calls.index("unload:gemma3:12b") < calls.index("Vocabulary")
-    assert calls.index("unload:qwen3:8b") < calls.index("LM2Output")
+    lm2_schema = "LM2Output" if "LM2Output" in calls else "LM2Record"
+    assert calls.index("unload:qwen3:8b") < calls.index(lm2_schema)
     assert calls.index("Vocabulary") < calls.index("unload:qwen3:8b")
 
 

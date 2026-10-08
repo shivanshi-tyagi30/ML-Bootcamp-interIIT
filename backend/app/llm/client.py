@@ -216,3 +216,80 @@ async def ollama_status(host: str, models: list[str], timeout: float = 3.0) -> d
         return {"reachable": False, "missing": models}
     have = names | {n.removesuffix(":latest") for n in names}
     return {"reachable": True, "missing": [m for m in models if m not in have and f"{m}:latest" not in names]}
+
+
+class GeminiClient:
+    """Fast, accurate cloud LLM using Google Gemini with structured JSON output and Ollama fallback."""
+
+    def __init__(
+        self, api_key: str, model: str = "gemini-2.5-flash", timeout: int = 60,
+        fallback: JSONLLM | None = None,
+    ) -> None:
+        self.api_key = api_key.strip()
+        self.model = model.strip() or "gemini-2.5-flash"
+        self.timeout = timeout
+        self.fallback = fallback
+
+    async def preload(self, model: str) -> bool:
+        return True
+
+    async def unload(self, model: str) -> None:
+        pass
+
+    async def json_call(
+        self, model: str, system: str, user: str, schema: type[T], max_retries: int, max_tokens: int = 4096,
+        job_id: str = "-", on_retry: OnRetry | None = None,
+    ) -> T:
+        """Call Gemini's OpenAI-compatible endpoint with JSON validation and fallback to local Ollama."""
+        url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        req_model = self.model if "gemini" in self.model else "gemini-2.5-flash"
+        body = {
+            "model": req_model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "temperature": 0.0,
+            "response_format": {"type": "json_object"},
+            "max_tokens": max_tokens,
+        }
+        last_error = ""
+        for attempt in range(max_retries + 1):
+            t0 = time.perf_counter()
+            try:
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    r = await client.post(url, headers=headers, json=body)
+                if r.status_code == 200:
+                    data = r.json()
+                    text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    log.info("gemini %s attempt=%d latency=%.2fs", req_model, attempt, time.perf_counter() - t0,
+                             extra={"job_id": job_id})
+                    try:
+                        return parse_output(text, schema)
+                    except InvalidModelOutput as e:
+                        last_error = str(e)
+                        log.warning("invalid %s output from gemini: %s", schema.__name__, last_error, extra={"job_id": job_id})
+                        if attempt < max_retries and on_retry:
+                            await on_retry(f"retrying Gemini JSON ({attempt + 2} of {max_retries + 1})")
+                        body["messages"] += [
+                            {"role": "assistant", "content": text[:4000]},
+                            {"role": "user", "content": REPAIR_MESSAGE.format(error=last_error)},
+                        ]
+                else:
+                    err_msg = r.text[:300]
+                    log.warning("gemini returned HTTP %d: %s", r.status_code, err_msg, extra={"job_id": job_id})
+                    if self.fallback:
+                        log.info("falling back to local LLM for %s", schema.__name__, extra={"job_id": job_id})
+                        return await self.fallback.json_call(model, system, user, schema, max_retries, max_tokens, job_id, on_retry)
+                    raise LLMUnavailable(f"Gemini API returned HTTP {r.status_code}: {err_msg}")
+            except Exception as e:
+                log.warning("gemini call failed (%r)", e, extra={"job_id": job_id})
+                if self.fallback:
+                    log.info("falling back to local LLM for %s", schema.__name__, extra={"job_id": job_id})
+                    return await self.fallback.json_call(model, system, user, schema, max_retries, max_tokens, job_id, on_retry)
+                raise LLMUnavailable(f"Gemini API failed: {e}") from e
+
+        if self.fallback:
+            return await self.fallback.json_call(model, system, user, schema, max_retries, max_tokens, job_id, on_retry)
+        raise InvalidModelOutput(f"Gemini returned invalid JSON {max_retries + 1} times: {last_error}")

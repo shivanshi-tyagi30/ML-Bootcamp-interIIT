@@ -57,8 +57,13 @@ async function readError(res: Response): Promise<JobError> {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
+  const apiKey = typeof window !== "undefined" ? localStorage.getItem("trace_api_key")?.trim() : null;
+  const headers = new Headers(init?.headers);
+  if (apiKey && !headers.has("x-gemini-key")) {
+    headers.set("x-gemini-key", apiKey);
+  }
   try {
-    res = await fetch(`${BASE}${path}`, init);
+    res = await fetch(`${BASE}${path}`, { ...init, headers });
   } catch {
     throw new ApiError(makeError("E_NETWORK"));
   }
@@ -146,6 +151,8 @@ const httpApi: Api = {
     form.append("file", file);
     if (title?.trim()) form.append("title", title.trim());
     if (glossary?.trim()) form.append("glossary", glossary.trim());
+    const apiKey = typeof window !== "undefined" ? localStorage.getItem("trace_api_key")?.trim() : null;
+    if (apiKey) form.append("api_key", apiKey);
     const body = await request<{ job_id: string; cached?: boolean }>(`/jobs${force ? "?force=true" : ""}`, {
       method: "POST",
       body: form,

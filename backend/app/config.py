@@ -55,6 +55,8 @@ class Settings(BaseSettings):
     LLM_BACKEND: Literal["ollama", "vllm"] = "ollama"
     LLM_BASE_URL: str = "http://localhost:11434/v1"
     LM2_BASE_URL: str = ""  # optional: separate server for LM2 (vLLM serves one model per server)
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-2.5-flash"
     LM1_MODEL: str = "qwen3:14b"
     LM2_MODEL: str = "gemma3:27b"
     LLM_TIMEOUT_SEC: int = 600

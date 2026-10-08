@@ -37,9 +37,11 @@ def default_title(filename: str, title: str | None) -> str:
 
 @router.post("/jobs", status_code=202, response_model=CreateJobResponse)
 async def create_job(
+    request: Request,
     file: UploadFile = File(...),
     title: str | None = Form(None),
     glossary: str | None = Form(None),
+    api_key: str | None = Form(None),
     force: bool = Query(False),
     state: AppState = Depends(get_state),
 ) -> Any:
@@ -69,9 +71,11 @@ async def create_job(
 
         job_title = default_title(filename, title)
         terms = [t.strip() for t in (glossary or "").split(",") if t.strip()][:100]
+        effective_key = (api_key or request.headers.get("x-gemini-key") or request.headers.get("x-api-key") or getattr(s, "GEMINI_API_KEY", "") or "").strip()
         write_json(d / STAGE_OUTPUT[Stage.VALIDATING], {
             **info, "job_id": job_id, "title": job_title, "source_file": filename, "glossary": terms,
             "uploaded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "api_key": effective_key,
         })
         await state.db.insert({
             "id": job_id, "title": job_title, "source_file": filename, "file_sha256": info["sha256"],

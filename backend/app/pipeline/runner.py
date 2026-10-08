@@ -113,13 +113,21 @@ class JobContext:
 
     @property
     def llm(self) -> JSONLLM:
-        """LLM client (created on first use)."""
+        """LLM client (created on first use): uses Gemini if API key is provided, else local Ollama."""
         if self._llm is None:
             s = self.settings
-            self._llm = LLMClient(
+            ollama_client = LLMClient(
                 s.LLM_BASE_URL, s.LLM_BACKEND, s.LLM_TIMEOUT_SEC, {s.LM2_MODEL: s.LM2_BASE_URL},
                 max_context=s.LLM_MAX_CONTEXT, keep_alive=s.OLLAMA_KEEP_ALIVE,
             )
+            api_key = (self.upload.get("api_key") or getattr(s, "GEMINI_API_KEY", "") or "").strip()
+            if api_key:
+                from app.llm.client import GeminiClient
+
+                gemini_model = getattr(s, "GEMINI_MODEL", "gemini-2.5-flash")
+                self._llm = GeminiClient(api_key=api_key, model=gemini_model, fallback=ollama_client)
+            else:
+                self._llm = ollama_client
         return self._llm
 
     def add_warning(self, code: str) -> None:
