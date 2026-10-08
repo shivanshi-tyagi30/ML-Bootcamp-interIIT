@@ -30,7 +30,9 @@ export function SetupCheck({ api }: { api: Api }) {
     } catch {
       /* storage unavailable */
     }
-    if (!cloudKey && !h.llm?.cloud) {
+    if (!cloudKey && h.llm?.key_required) {
+      problems.push({ text: "This website needs a Gemini API key to write the minutes (free, no card).", fix: "Paste it in the API key box below" });
+    } else if (!cloudKey && !h.llm?.cloud) {
       if (h.llm?.reachable === false) problems.push({ text: `Ollama isn't reachable at ${h.llm.host}.`, fix: "ollama serve" });
       else for (const m of h.llm?.missing ?? []) problems.push({ text: `Model ${m} isn't downloaded.`, fix: `ollama pull ${m}` });
     }

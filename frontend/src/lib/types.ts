@@ -163,6 +163,7 @@ export type ErrorCode =
   | "E_LM1_FAILED"
   | "E_LM2_FAILED"
   | "E_RENDER_FAILED"
+  | "E_NEEDS_KEY"
   | "E_BUSY"
   | "E_NOT_FOUND"
   | "E_JOB_RUNNING"
@@ -222,7 +223,7 @@ export interface JobState {
 export interface Health {
   status: string;
   ffmpeg?: boolean;
-  llm?: { backend: string; host: string; reachable: boolean | null; missing: string[]; cloud?: string };
+  llm?: { backend: string; host: string; reachable: boolean | null; missing: string[]; cloud?: string; key_required?: boolean };
   whisper?: { model: string; device: string; compute_type: string; beam_size: number };
   gpu?: boolean;
 }
