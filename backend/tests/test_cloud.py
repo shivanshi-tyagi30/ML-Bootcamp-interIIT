@@ -209,3 +209,44 @@ def test_unknown_model_without_alternatives_lists_what_the_key_can_use(monkeypat
     mock(monkeypatch, handler)
     with pytest.raises(LLMUnavailable, match="text-embedding-004"):
         run(GeminiClient("key", "gemini-2.5-flash"))
+
+
+def test_overloaded_model_switches_to_another_cloud_model_not_the_local_one(monkeypatch):
+    from app.llm import client as client_mod
+
+    monkeypatch.setattr(client_mod, "RESOLVED_MODELS", {})
+    monkeypatch.setattr(asyncio, "sleep", lambda s: _noop())
+    models = {"data": [{"id": f"models/{m}"} for m in ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]]}
+    seen = []
+
+    def handler(req):
+        if req.method == "GET":
+            return httpx.Response(200, json=models)
+        body = json.loads(req.content)
+        seen.append(body["model"])
+        if body["model"] == "gemini-2.5-flash":
+            return httpx.Response(503, json={"error": {"code": 503, "message": "high demand"}})
+        return reply(json.dumps(GOOD))
+
+    mock(monkeypatch, handler)
+    local = FakeLocal()
+    client = GeminiClient("key", "gemini-2.5-flash", fallback=local)
+    assert run(client).domain == "ml"
+    assert seen == ["gemini-2.5-flash"] * 4 + ["gemini-2.0-flash"]
+    assert client.model == "gemini-2.0-flash" and local.calls == 0 and "fallback" not in client.name
+
+
+def test_every_model_overloaded_is_a_clear_retry_message(monkeypatch):
+    from app.llm import client as client_mod
+
+    monkeypatch.setattr(client_mod, "RESOLVED_MODELS", {})
+    monkeypatch.setattr(asyncio, "sleep", lambda s: _noop())
+
+    def handler(req):
+        if req.method == "GET":
+            return httpx.Response(200, json={"data": [{"id": "models/gemini-2.5-flash"}]})
+        return httpx.Response(503, text="high demand")
+
+    mock(monkeypatch, handler)
+    with pytest.raises(LLMUnavailable, match="overloaded.*Retry"):
+        run(GeminiClient("key", "gemini-2.5-flash"))
