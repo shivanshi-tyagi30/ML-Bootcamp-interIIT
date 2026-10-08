@@ -196,10 +196,18 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
 
 def mount_frontend(app: FastAPI, dist: Path) -> None:
     """Serve the built single-page frontend at / (API routes registered earlier take precedence)."""
+    from fastapi.responses import FileResponse
+
     log = logging.getLogger(__name__)
-    if not (dist / "index.html").exists():
+    index = dist / "index.html"
+    if not index.exists():
         log.warning("SERVE_FRONTEND is on but %s has no index.html; run `npm run build` in frontend/", dist)
         return
+
+    @app.get("/", include_in_schema=False)
+    async def serve_index() -> FileResponse:
+        return FileResponse(index, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+
     app.mount("/", StaticFiles(directory=dist, html=True), name="frontend")
     log.info("serving the website from %s", dist)
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, type Api } from "../lib/api";
 import { fmtTime } from "../lib/format";
 import type { JobSummary } from "../lib/types";
@@ -157,8 +157,22 @@ export function RecentMeetings({ api, onOpen }: { api: Api; onOpen: (jobId: stri
     return () => window.clearInterval(t);
   }, [load]);
 
+  const visibleJobs = useMemo(() => {
+    if (!jobs) return null;
+    try {
+      const stored = localStorage.getItem("trace_my_jobs");
+      if (stored) {
+        const allowed = new Set<string>(JSON.parse(stored));
+        return jobs.filter((j) => allowed.has(j.id));
+      }
+    } catch {
+      /* ignore */
+    }
+    return [];
+  }, [jobs]);
+
   if (error) return <p className="mt-8 font-mono text-[11px] text-ink-3">{error}</p>;
-  if (!jobs?.length) return null;
+  if (!visibleJobs?.length) return null;
 
   return (
     <section className="mt-10 max-w-[560px]" aria-label="Recent meetings">
@@ -166,7 +180,7 @@ export function RecentMeetings({ api, onOpen }: { api: Api; onOpen: (jobId: stri
         <span className="checker" /> RECENT MEETINGS
       </h2>
       <ul className="max-h-[260px] overflow-y-auto border border-ink/15 bg-surface">
-        {jobs.map((j) => (
+        {visibleJobs.map((j) => (
           <Row
             key={j.id}
             job={j}
@@ -198,6 +212,10 @@ export function RecentMeetings({ api, onOpen }: { api: Api; onOpen: (jobId: stri
             onDelete={async () => {
               try {
                 await api.deleteJob(j.id);
+                try {
+                  const stored: string[] = JSON.parse(localStorage.getItem("trace_my_jobs") || "[]");
+                  localStorage.setItem("trace_my_jobs", JSON.stringify(stored.filter((id) => id !== j.id)));
+                } catch {}
                 setJobs((js) => js?.filter((x) => x.id !== j.id) ?? null);
               } catch (e) {
                 setError(e instanceof ApiError ? e.jobError.user_message : "Delete failed.");

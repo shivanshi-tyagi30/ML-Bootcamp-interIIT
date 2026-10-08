@@ -255,12 +255,12 @@ class GeminiClient:
     """
 
     def __init__(
-        self, api_key: str, model: str = "gemini-2.5-flash", timeout: int = 300,
-        base_url: str = GEMINI_OPENAI_URL, reasoning_effort: str = "low",
+        self, api_key: str, model: str = "gemini-2.0-flash", timeout: int = 300,
+        base_url: str = GEMINI_OPENAI_URL, reasoning_effort: str = "",
     ) -> None:
         """Create a client for one cloud model (used for both LM1 and LM2)."""
         self.api_key = api_key.strip()
-        self.requested = model.strip() or "gemini-2.5-flash"
+        self.requested = model.strip() or "gemini-2.0-flash"
         self.base_url = base_url.rstrip("/")
         # A retired model replaced once is replaced for every later job too (no repeated 404s).
         self.model = RESOLVED_MODELS.get((self.base_url, self.requested), self.requested)
@@ -271,6 +271,7 @@ class GeminiClient:
         self.timeout = timeout
         self.reasoning_effort = reasoning_effort.strip()
         self.schema_in_prompt = False  # set after a provider rejects json_schema
+        self.plain_json_only = False  # set if json_object is also rejected
         self.minimal_ok = True  # cleared after a provider rejects reasoning_effort="minimal"
         self._available: list[str] = []
         self._tried: set[str] = set()
@@ -295,7 +296,9 @@ class GeminiClient:
             "temperature": 0.0,
             "max_tokens": max(max_tokens * 2, CLOUD_MIN_OUTPUT_TOKENS),
         }
-        if self.schema_in_prompt:
+        if self.plain_json_only:
+            pass  # provider rejects both schema types; prompt text carries schema
+        elif self.schema_in_prompt:
             body["response_format"] = {"type": "json_object"}
         else:
             body["response_format"] = {"type": "json_schema", "json_schema": {
@@ -370,9 +373,10 @@ class GeminiClient:
                     notify: OnRetry | None = None) -> str:
         """One completed call; adapts to providers that reject json_schema or reasoning_effort, to retired
         models, and to a model that stays overloaded (switches to another cloud model, never to the local one)."""
-        for _ in range(8):
-            body = self._body(messages if not self.schema_in_prompt else _with_schema(messages, schema),
-                              schema, max_tokens)
+        r: httpx.Response | None = None
+        for attempt in range(8):
+            msgs = messages if (not self.schema_in_prompt and not self.plain_json_only) else _with_schema(messages, schema)
+            body = self._body(msgs, schema, max_tokens)
             try:
                 r = await self._post(body)
             except httpx.TimeoutException as e:
@@ -389,18 +393,28 @@ class GeminiClient:
                 if about_effort and self.reasoning_effort:
                     self.reasoning_effort = ""  # provider without that option
                     continue
-                if not self.schema_in_prompt and ("schema" in text or "response_format" in text):
+                if not self.schema_in_prompt and not self.plain_json_only:
                     self.schema_in_prompt = True
+                    continue
+                if not self.plain_json_only:
+                    self.plain_json_only = True
                     continue
             if r.status_code in (401, 403):
                 raise LLMUnavailable("The cloud model rejected the API key. Check the key and try again.")
+            if r.status_code == 429:
+                wait_sec = min(float(r.headers.get("retry-after") or 6.0), 15.0)
+                if attempt < 4:
+                    if notify:
+                        await notify(f"Rate limited by Google, waiting {int(wait_sec)}s...")
+                    log.warning("cloud LLM rate limited (429); waiting %.1fs", wait_sec)
+                    await asyncio.sleep(wait_sec)
+                    continue
+                detail = r.json().get("error", {}).get("message", r.text[:200]) if r.text.startswith("{") else r.text[:200]
+                raise LLMUnavailable(f"Google Gemini rate limit reached: {detail}. Please try again with a fresh key from aistudio.google.com.")
             if r.status_code in BUSY and await self._switch(f"is busy (HTTP {r.status_code})", notify):
                 continue
-            if r.status_code == 429:
-                raise LLMUnavailable("The cloud model's free-tier rate limit was reached. Wait a minute and retry.")
             if r.status_code in BUSY:
-                raise LLMUnavailable("The cloud model is overloaded right now (Google says this is usually "
-                                     "temporary). Wait a minute and press Retry: finished steps are kept.")
+                raise LLMUnavailable("The cloud model is overloaded right now. Wait a minute and press Retry: finished steps are kept.")
             if r.status_code == 404:
                 # Model retired or renamed: ask the provider which models this key can use and pick one.
                 replacement = await self._discover_model()
@@ -424,7 +438,8 @@ class GeminiClient:
             if choice.get("finish_reason") == "length":
                 log.warning("cloud LLM answer was cut off at max_tokens=%s", body["max_tokens"])
             return (choice.get("message") or {}).get("content") or ""
-        raise LLMUnavailable("The cloud model rejected the request format.")
+        detail = f"HTTP {r.status_code}: {r.text[:200]}" if r is not None else "no response"
+        raise LLMUnavailable(f"Cloud model did not complete request: {detail}")
 
     async def json_call(
         self, model: str, system: str, user: str, schema: type[T], max_retries: int, max_tokens: int = 4096,
@@ -458,7 +473,7 @@ class GeminiClient:
 
 
 LIGHT_SCHEMAS = {"LM1Output", "Vocabulary"}  # steps whose every output is re-checked by code
-BUSY = (429, 500, 502, 503, 504)
+BUSY = (500, 502, 503, 504)
 CLOUD_BUSY_RETRIES = 1  # one short wait, then another model (a busy model often stays busy for minutes)
 CLOUD_BUSY_WAIT = 2.0
 CLOUD_MAX_WAIT = 10.0  # cap on the provider's retry-after

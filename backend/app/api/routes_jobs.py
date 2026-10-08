@@ -70,6 +70,7 @@ async def create_job(
     job_id = uuid4().hex
     d = job_dir(s.jobs_dir, job_id)
     filename = Path(file.filename or "recording").name[:200]
+    device_id = (request.headers.get("x-device-id") or "").strip()
     try:
         stored = d / f"original.{extension_of(filename) or 'bin'}"
         try:
@@ -80,7 +81,7 @@ async def create_job(
             return JSONResponse(status_code=e.http_status, content={"code": e.code, "message": e.user_message})
 
         if not force:
-            cached = await state.db.find_completed_by_sha(info["sha256"])
+            cached = await state.db.find_completed_by_sha(info["sha256"], device_id=device_id)
             if cached and made_with_cloud(s.jobs_dir, cached["id"]) == bool(effective_key):
                 shutil.rmtree(d, ignore_errors=True)
                 return JSONResponse(status_code=200, content={"job_id": cached["id"], "status": "completed",
@@ -90,13 +91,14 @@ async def create_job(
         terms = [t.strip() for t in (glossary or "").split(",") if t.strip()][:100]
         write_json(d / STAGE_OUTPUT[Stage.VALIDATING], {
             **info, "job_id": job_id, "title": job_title, "source_file": filename, "glossary": terms,
+            "device_id": device_id,
             "uploaded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         })
         if effective_key:
             remember_api_key(job_id, effective_key)  # memory only: a key is never written to disk
         await state.db.insert({
             "id": job_id, "title": job_title, "source_file": filename, "file_sha256": info["sha256"],
-            "status": "queued", "stage": Stage.QUEUED.value,
+            "status": "queued", "stage": Stage.QUEUED.value, "device_id": device_id,
         })
         state.schedule(job_id)
         return CreateJobResponse(job_id=job_id, status="queued", cached=False)
@@ -106,10 +108,14 @@ async def create_job(
 
 @router.get("/jobs", response_model=JobList)
 async def list_jobs(
+    request: Request,
     limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), state: AppState = Depends(get_state),
 ) -> JobList:
-    """Past and current meetings, newest first."""
-    rows, total = await state.db.list(limit, offset)
+    """Past and current meetings for the calling device."""
+    device_id = (request.headers.get("x-device-id") or "").strip()
+    if not device_id:
+        return JobList(items=[], total=0)
+    rows, total = await state.db.list(limit, offset, device_id=device_id)
     return JobList(items=[JobSummary.from_row(r) for r in rows], total=total)
 
 

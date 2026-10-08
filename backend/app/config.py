@@ -69,11 +69,11 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     # False on a hosted website without Ollama: every upload must bring a cloud API key (else E_NEEDS_KEY).
     LOCAL_LLM_ENABLED: bool = True
-    GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_MODEL: str = "gemini-2.0-flash"
     # Any OpenAI-compatible endpoint works (e.g. https://api.openai.com/v1 with a GPT model).
     CLOUD_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta/openai"
     CLOUD_TIMEOUT_SEC: int = 300
-    CLOUD_REASONING_EFFORT: str = "low"  # thinking models: "low" keeps answers fast; "" = provider default
+    CLOUD_REASONING_EFFORT: str = ""  # thinking models: "" = provider default
     LM1_MODEL: str = "qwen3:14b"
     LM2_MODEL: str = "gemma3:27b"
     LLM_TIMEOUT_SEC: int = 600
