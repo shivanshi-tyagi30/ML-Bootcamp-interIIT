@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Literal, Protocol, TypeVar
@@ -240,6 +241,9 @@ def inline_schema(schema: type[BaseModel]) -> dict[str, Any]:
     return walk(full)
 
 
+RESOLVED_MODELS: dict[tuple[str, str], str] = {}  # (base_url, requested model) -> model actually available
+
+
 class GeminiClient:
     """Cloud LLM through an OpenAI-compatible chat API (Google Gemini by default; GPT, Groq etc. by URL).
 
@@ -256,12 +260,15 @@ class GeminiClient:
     ) -> None:
         """Create a client for one cloud model (used for both LM1 and LM2)."""
         self.api_key = api_key.strip()
-        self.model = model.strip() or "gemini-2.5-flash"
+        self.requested = model.strip() or "gemini-2.5-flash"
+        self.base_url = base_url.rstrip("/")
+        # A retired model replaced once is replaced for every later job too (no repeated 404s).
+        self.model = RESOLVED_MODELS.get((self.base_url, self.requested), self.requested)
         self.timeout = timeout
         self.fallback = fallback
-        self.base_url = base_url.rstrip("/")
         self.reasoning_effort = reasoning_effort.strip()
         self.schema_in_prompt = False  # set after a provider rejects json_schema
+        self._available: list[str] = []
         self.used_fallback = False
 
     @property
@@ -308,6 +315,18 @@ class GeminiClient:
             return r
         return r
 
+    async def _discover_model(self) -> str | None:
+        """Best available chat model for this key (newest "flash" model, else newest "pro"), or None."""
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                r = await client.get(f"{self.base_url}/models", headers={"Authorization": f"Bearer {self.api_key}"})
+            ids = [str(m.get("id", "")).removeprefix("models/") for m in r.json().get("data", [])]
+        except Exception as e:  # noqa: BLE001
+            log.warning("could not list cloud models (%r)", e)
+            return None
+        self._available = ids
+        return pick_chat_model(ids)
+
     async def _call(self, messages: list[dict[str, str]], schema: type[BaseModel], max_tokens: int) -> str:
         """One completed call; adapts once to providers that reject json_schema or reasoning_effort."""
         for _ in range(3):
@@ -330,7 +349,16 @@ class GeminiClient:
             if r.status_code == 429:
                 raise LLMUnavailable("The cloud model's free-tier rate limit was reached. Wait a minute and retry.")
             if r.status_code == 404:
-                raise LLMUnavailable(f"Model '{self.model}' was not found at {self.base_url}. Check GEMINI_MODEL.")
+                # Model retired or renamed: ask the provider which models this key can use and pick one.
+                replacement = await self._discover_model()
+                if replacement and replacement != self.model:
+                    log.warning("cloud model %s not found; using %s instead", self.model, replacement)
+                    RESOLVED_MODELS[(self.base_url, self.requested)] = replacement
+                    self.model = replacement
+                    continue
+                avail = ", ".join(self._available[:12]) or "none listed"
+                raise LLMUnavailable(f"Model '{self.model}' was not found. Models this key can use: {avail}. "
+                                     "Set GEMINI_MODEL to one of them.")
             if r.status_code >= 400:
                 raise LLMUnavailable(f"Cloud model returned HTTP {r.status_code}: {r.text[:300]}")
             choice = (r.json().get("choices") or [{}])[0]
@@ -375,6 +403,26 @@ class GeminiClient:
                     {"role": "user", "content": REPAIR_MESSAGE.format(error=last_error)},
                 ]
         raise InvalidModelOutput(f"{self.model} returned invalid JSON {max_retries + 1} times: {last_error}")
+
+
+NOT_CHAT = ("embed", "image", "tts", "audio", "live", "vision", "aqa", "veo", "imagen", "learnlm", "robotics",
+            "computer-use", "native", "transcribe", "lyria", "nano", "gemma")
+
+
+def pick_chat_model(ids: list[str]) -> str | None:
+    """Newest general chat model: prefer "flash" (fast), skip "lite", previews/experiments if a stable one exists."""
+    def version(m: str) -> tuple[float, ...]:
+        nums = re.findall(r"(\d+(?:\.\d+)?)", m)
+        return tuple(float(n) for n in nums[:2]) or (0.0,)
+
+    chat = [m for m in ids if m.startswith("gemini") and not any(x in m for x in NOT_CHAT)] or \
+           [m for m in ids if not any(x in m for x in NOT_CHAT)]
+    for want in ("flash", "pro", ""):
+        pool = [m for m in chat if want in m and "lite" not in m] or [m for m in chat if want in m]
+        stable = [m for m in pool if not re.search(r"preview|exp|latest|\d{2}-\d{2}", m)] or pool
+        if stable:
+            return max(stable, key=lambda m: (version(m), -len(m)))
+    return None
 
 
 def _with_schema(messages: list[dict[str, str]], schema: type[BaseModel]) -> list[dict[str, str]]:
