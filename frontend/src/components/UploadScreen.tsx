@@ -37,7 +37,7 @@ function Promise_({ label, value }: { label: string; value: string }) {
 
 export function UploadScreen({ error, busy, mock, theme, onTheme, api, onStart, onOpenJob, onSample, onClearError }: Props) {
   const [file, setFile] = useState<File | null>(null);
-  const [glossary, setGlossary] = useState("");
+  const [title, setTitle] = useState("");
   const [drag, setDrag] = useState(false);
   const [localError, setLocalError] = useState<JobError | null>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -144,15 +144,21 @@ export function UploadScreen({ error, busy, mock, theme, onTheme, api, onStart, 
             </label>
 
             <div className="mx-3 mb-3">
-              <label htmlFor="glossary" className="font-mono text-[10.5px] tracking-[0.14em] text-ink-3">
-                EXPECTED TERMS · OPTIONAL
+              <label htmlFor="meeting-title" className="block font-mono text-[10.5px] font-semibold tracking-[0.14em] text-ink-2">
+                NAME OF THE MEETING · OPTIONAL
               </label>
               <input
-                id="glossary"
-                value={glossary}
-                onChange={(e) => setGlossary(e.target.value)}
-                placeholder="e.g. Priya, Kubernetes, RAG"
-                className="mt-1 h-9 w-full border-b border-line bg-transparent text-[14px] placeholder:text-ink-3/80 focus:border-ink focus:outline-none"
+                id="meeting-title"
+                type="text"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && file && !localError && !busy) {
+                    onStart(file, { title: title.trim(), glossary: "" });
+                  }
+                }}
+                placeholder="e.g. Meeting 1"
+                className="mt-1.5 h-10 w-full rounded-[2px] border border-ink/30 bg-surface px-3 text-[14px] font-medium text-ink placeholder:text-ink-3 transition-colors hover:border-ink/60 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
               />
             </div>
 
@@ -161,14 +167,12 @@ export function UploadScreen({ error, busy, mock, theme, onTheme, api, onStart, 
                 <button onClick={onSample} className="font-mono text-[11px] tracking-[0.1em] text-ink-2 hover:text-ink">
                   OPEN SAMPLE MEETING →
                 </button>
-              ) : (
-                <span className="font-mono text-[11px] text-ink-3">English speech works best</span>
-              )}
+              ) : null}
               <button
                 disabled={!!localError || busy}
                 // With no file yet, the button opens the file picker instead.
-                onClick={() => (file ? onStart(file, { title: "", glossary }) : input.current?.click())}
-                className="inline-flex h-10 items-center gap-2 bg-accent px-5 text-[14px] font-bold text-accent-ink transition hover:bg-ink hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={() => (file ? onStart(file, { title: title.trim(), glossary: "" }) : input.current?.click())}
+                className="ml-auto inline-flex h-10 items-center gap-2 bg-accent px-5 text-[14px] font-bold text-accent-ink transition hover:bg-ink hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {busy ? "Uploading…" : file ? "Start processing" : "Choose a recording"}
                 <span aria-hidden>→</span>
