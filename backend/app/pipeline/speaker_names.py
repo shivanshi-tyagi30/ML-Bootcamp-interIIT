@@ -33,8 +33,12 @@ SELF_INTRO = [
 ADDRESS = [
     re.compile(r"\b(?:hi|hello|hey|thanks|thank you|welcome|morning|good morning|bye|goodbye),?\s+"
                + NAME + r"\b(?!')"),
-    re.compile(r"(?:^|[.!?]\s+)" + NAME + r",?\s+(?:can|could|will|would|should|shall|do|did|does|have|has|are|is|"
+    # "Prachi, should we..." (comma: any follow-up) / "Prachi can you..." (no comma: direct questions only).
+    # "Standard whisper is terrible" is a statement, not someone being addressed.
+    re.compile(r"(?:^|[.!?]\s+)" + NAME + r",\s+(?:can|could|will|would|should|shall|do|did|does|have|has|are|is|"
                r"what|how|why|when|where|which|please|you|any|tell|let's|go ahead|take over|take it)\b"),
+    re.compile(r"(?:^|[.!?]\s+)" + NAME + r"\s+(?:can you|could you|will you|would you|please|do you|did you|"
+               r"are you|have you|go ahead|take over)\b"),
     re.compile(r"\b(?:over to|pass to|hand over to|handing over to|let's hear from|asking|invite|welcome)\s+"
                + NAME + r"\b(?!')"),
     re.compile(r"\b(?:what do you think|your thoughts|what's your take|are you there|you agree|right)[, ]+"
@@ -151,12 +155,10 @@ def find_speaker_names(segments: list[Segment]) -> dict[str, dict[str, Any]]:
         a2 = _find(ADDRESS, s2.text, allow_lower=lower_transcript)
         if a1 and a2 and a1[0].lower() != a2[0].lower():
             name_a, name_b = a1[0], a2[0]
-            spk1 = s1.speaker if (s1.speaker and s1.speaker != s2.speaker) else "Speaker 1"
-            spk2 = s2.speaker if (s2.speaker and s2.speaker != s1.speaker) else "Speaker 2"
-            s1.speaker = spk1
-            s2.speaker = spk2
-            for rem_idx in range(i + 2, len(segments)):
-                segments[rem_idx].speaker = spk1 if (rem_idx - i) % 2 == 0 else spk2
+            # Speaker labels come from the voice model only; a greeting never rewrites them.
+            if not (s1.speaker and s2.speaker and s1.speaker != s2.speaker):
+                continue
+            spk1, spk2 = s1.speaker, s2.speaker
             votes[spk1][name_b] = max(votes[spk1].get(name_b, 0), 5.0)
             votes[spk2][name_a] = max(votes[spk2].get(name_a, 0), 5.0)
             proof[(spk1, name_b)].append({"segment_id": s1.id, "kind": "mutual_greeting", "text": s1.text})
@@ -180,3 +182,59 @@ def apply_speaker_names(segments: list[Segment], names: dict[str, dict[str, Any]
     """Copies of the segments with "Speaker N" replaced by the found names."""
     return [s.model_copy(update={"speaker": names[s.speaker]["name"]}) if s.speaker in names else s
             for s in segments]
+
+
+SELF_CUE = re.compile(r"\b(?:i am|i'm|im|my name is|my name's|myself|this is|call me|it's)\s+$", re.I)
+AFTER_SELF = re.compile(r"^\s*(?:here|speaking)\b", re.I)
+LLM_REPLY_WINDOW = 3
+# A name used to address someone: after a greeting or at the start of a sentence, and followed by a pause,
+# the end, or a direct question ("Hi Sara, ...", "Hello Alex.", "Prachi can you...").
+ADDRESSED_BEFORE = re.compile(r"(?:^|[.!?]\s*|\b(?:hi|hello|hey|thanks|thank you|bye|okay|ok|so|well|yes|no|"
+                              r"morning|good morning|welcome|dear)[,!]?\s+|,\s*)$", re.I)
+ADDRESSED_AFTER = re.compile(r"^(?:\s*[,.!?]|\s*$|\s+(?:can|could|will|would|do|did|are|have|please|what|how|why|"
+                             r"when|where)\b)", re.I)
+
+
+def verify_llm_names(proposed: list[Any], segments: list[Segment], taken: set[str] | None = None,
+                     ) -> dict[str, dict[str, Any]]:
+    """Keep only LM2's speaker names that the transcript supports. {label: {"name", "evidence"}}.
+
+    The name must be said on the cited line and not be a common word, place or technical term, and the line
+    must show who it is: the label introducing themselves ("I'm Sara", "Sara here"), someone addressing them
+    just before they speak ("Hi Sara" -> Sara answers within the next few lines), or them being greeted right
+    after they spoke ("Hello Alex" said to the person who spoke just before). One name per person.
+    """
+    by_id = {s.id: i for i, s in enumerate(segments)}
+    labels = {s.speaker for s in segments if s.speaker}
+    used = {n.lower() for n in (taken or set())}
+    out: dict[str, dict[str, Any]] = {}
+    for p in proposed:
+        label = getattr(p, "label", "") or ""
+        name = _clean(" ".join((getattr(p, "name", "") or "").split()[:2])) if getattr(p, "name", "") else None
+        idx = by_id.get(getattr(p, "evidence_segment_id", "") or "")
+        if (not name or label not in labels or not re.fullmatch(r"Speaker \d+", label) or label in out
+                or name.lower() in used or idx is None):
+            continue
+        ev = segments[idx]
+        m = re.search(r"(?<!\w)" + re.escape(name.split()[0]) + r"(?!\w)", ev.text, re.I)
+        if not m:
+            continue
+        if ev.speaker == label:
+            ok = bool(SELF_CUE.search(ev.text[: m.start()]) or AFTER_SELF.search(ev.text[m.end():]))
+        elif not (ADDRESSED_BEFORE.search(ev.text[: m.start()]) and ADDRESSED_AFTER.search(ev.text[m.end():])):
+            ok = False  # the word is there but not used to address someone ("Standard whisper is...")
+        else:
+            after = [s.speaker for s in segments[idx + 1: idx + 1 + LLM_REPLY_WINDOW]]
+            before = next((s.speaker for s in reversed(segments[:idx]) if s.speaker and s.speaker != ev.speaker), None)
+            ok = label in after or before == label
+        if ok:
+            out[label] = {"name": name, "evidence": [{"segment_id": ev.id, "kind": "model_verified", "text": ev.text}]}
+            used.add(name.lower())
+    return out
+
+
+def rename_in_text(text: str, names: dict[str, dict[str, Any]]) -> str:
+    """Replace "Speaker N" labels in model-written text with the verified names."""
+    for label, v in names.items():
+        text = re.sub(r"\b" + re.escape(label) + r"\b", v["name"], text)
+    return text

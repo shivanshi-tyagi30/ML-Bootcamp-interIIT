@@ -22,6 +22,11 @@ DEFINITIONS
   (then point to the self-introduction). Anything else -> null.
 - DEADLINE: POINT to the time words actually said ("by Friday", "next sprint")
   the same way. Never convert to a calendar date. Not said -> null.
+- SPEAKERS: each line is labelled with a name or "Speaker N". For every "Speaker N" whose real name the
+  conversation reveals, output {"label": "Speaker 2", "name": "Sara", "evidence_segment_id": "S003"}, citing the
+  line where the name is said: that speaker introducing themselves, someone addressing them by name just
+  before they reply, or them being greeted right after they spoke. Use your understanding of the
+  conversation, not keywords. Never guess a name from a role; leave out labels you cannot name.
 - SELF-CORRECTION: if a speaker corrects themselves ("Friday... no, Monday"),
   the LAST stated value counts. Point to that one.
 - SUMMARY and MINUTES are YOUR notes, written like a professional minute-taker, NOT the transcript:
@@ -45,6 +50,11 @@ Step 5 SELF-CHECK: Delete any item you cannot cite. Empty lists are correct when
 Summary and minutes are never empty when anything was discussed (even "Introductions" is a topic).
 
 EXAMPLES
+[S001] (Speaker 1) Hi Sara, let's finalize the model architecture.
+[S002] (Speaker 2) Hello Alex. I strongly disagree with standard Whisper.
+-> speakers: [{"label":"Speaker 2","name":"Sara","evidence_segment_id":"S001"},
+              {"label":"Speaker 1","name":"Alex","evidence_segment_id":"S002"}]
+
 [S010] (A) Maybe we should move the vector store to Postgres.
 [S011] (B) Yeah, could be cheaper.
 -> summary: [{"text": "The team discussed moving the vector store to Postgres for cost efficiency.", "evidence_segment_ids": ["S010", "S011"]}]
@@ -100,4 +110,4 @@ EXAMPLES
    ]
    (WRONG: {"text": "Let's postpone that. For now we'll accept uploaded recordings only."} copies the transcript.)
 
-Output only JSON with these fields: summary, minutes, decisions, open_proposals, action_items.
+Output only JSON with these fields: speakers, summary, minutes, decisions, open_proposals, action_items.

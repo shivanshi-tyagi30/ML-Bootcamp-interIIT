@@ -83,10 +83,19 @@ class LM2Proposal(BaseModel):
     evidence_segment_ids: list[str] = []
 
 
+class LM2Speaker(BaseModel):
+    """LM2's reading of who a "Speaker N" label is; checked by code before it is used."""
+
+    label: str
+    name: str
+    evidence_segment_id: str = ""
+
+
 class LM2Record(BaseModel):
     """LM2 output without a scratchpad (LM2_SCRATCHPAD=false). Missing lists count as empty; the verifier
     removes anything that is not properly cited, so a small slip no longer fails the whole job."""
 
+    speakers: list[LM2Speaker] = []
     summary: list[LM2Sentence] = []
     minutes: list[LM2Topic] = []
     decisions: list[LM2Decision] = []
@@ -98,6 +107,7 @@ class LM2Output(BaseModel):
     """LM2 output with the reasoning scratchpad first (generated before the record); discarded after parsing."""
 
     scratchpad: str = ""
+    speakers: list[LM2Speaker] = []
     summary: list[LM2Sentence] = []
     minutes: list[LM2Topic] = []
     decisions: list[LM2Decision] = []
